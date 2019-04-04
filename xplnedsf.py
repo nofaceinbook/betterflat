@@ -1,6 +1,6 @@
 #******************************************************************************
 #
-# xplnedsf.py        Version 0.12
+# xplnedsf.py        Version 0.13
 # ---------------------------------------------------------
 # Python module for reading and writing X_Plane DSF files.
 #   (zipped DSF files have to be unzipped with 7-zip first!)
@@ -120,8 +120,9 @@ class XPLNEDSF:
         l = 0
         for sub_id in self._AtomStructure_[id]:
             if sub_id in self._MultiAtoms_:
-                for a in self._Atoms_[sub_id]: #for multiple atoms we have to add length of each instance
-                    l += len(a) + 8  # add 8 bytes for each AtomID + Length header
+                if sub_id in self._Atoms_: #check that sub-atom is really present 
+                    for a in self._Atoms_[sub_id]: #for multiple atoms we have to add length of each instance
+                        l += len(a) + 8  # add 8 bytes for each AtomID + Length header
             else: #for single atoms just lengths of atom
                 l += len(self._Atoms_[sub_id]) + 8 # add 8 bytes for AtomID + Length header
         return l + 8  # add 8 for header of TopAtom itself
@@ -482,13 +483,19 @@ class XPLNEDSF:
             print("Extracting properties and definitions ...", flush = True)
         self._extractProps_()
         self._extractDefs_()
-        self._extractRaster_(log)
+        if 'IMED' in self._Atoms_:
+            self._extractRaster_(log)
+        else:
+            print("Info: This dsf file has no raster layers.")
         self._extractPools_(16, log)
-        self._extractPools_(32, log)
         self._extractScalings_(16, log)
-        self._extractScalings_(32, log)
         self._scaleV_(16, False, log) #False that scaling is not reversed
-        self._scaleV_(32, False, log) #False that scaling is not reversed
+        if '23OP' in self._Atoms_:
+            self._extractPools_(32, log)
+            self._extractScalings_(32, log)
+            self._scaleV_(32, False, log) #False that scaling is not reversed
+        else:
+            print("Info: This dsf file has no 32-bit pools.")
         self._unpackCMDS_(log)
         self._extractCMDS_(log)
         return 0
