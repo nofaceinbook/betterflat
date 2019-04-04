@@ -4,7 +4,7 @@ import sys
 
 def printInfo():
     print ("------------------------------------------------------------------------------")
-    print ("             X-PLANE betterflat   version 0.12 (test)  by schmax")
+    print ("             X-PLANE betterflat   version 0.13 (test)  by schmax")
     print ("This script adapts an X-Plane dsf-file to flatten height at an airport.")
     print ("Usage: betterflat <dsf-filename> <apt.dat including airport>")
     print ("               <opt: 4 letter uppercase ICAO Code> <opt: new heigth in m>")
@@ -155,7 +155,7 @@ count = 0
 sum = 0
 for v in s:
     count += 1
-    sum += dsf.getElevation(dsf.V[v[0]][v[1]][0], dsf.V[v[0]][v[1]][1])
+    sum += dsf.getElevation(dsf.V[v[0]][v[1]][0], dsf.V[v[0]][v[1]][1], dsf.V[v[0]][v[1]][2])
 averageheight = round(sum / count)
 print ("Average height of boundary vertexes:", averageheight)
 
@@ -166,7 +166,7 @@ else:
     print("Take given height", newheight,"(in m) as new height for according vertices.")
     
 for v in s:
-    print (dsf.V[v[0]][v[1]], "with height", dsf.getElevation(dsf.V[v[0]][v[1]][0], dsf.V[v[0]][v[1]][1]), "changed to: ", newheight )
+    print (dsf.V[v[0]][v[1]], "with height", dsf.getElevation(dsf.V[v[0]][v[1]][0], dsf.V[v[0]][v[1]][1], dsf.V[v[0]][v[1]][2]), "changed to: ", newheight )
     dsf.V[v[0]][v[1]][2] = newheight
 
 print("Renaming original dsf-file to:", dsffile)
