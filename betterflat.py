@@ -4,7 +4,7 @@ import sys
 
 def printInfo():
     print ("------------------------------------------------------------------------------")
-    print ("             X-PLANE betterflat   version 0.13 (test)  by schmax")
+    print ("             X-PLANE betterflat   version 0.14 (test)  by schmax")
     print ("This script adapts an X-Plane dsf-file to flatten height at an airport.")
     print ("Usage: betterflat <dsf-filename> <apt.dat including airport>")
     print ("               <opt: 4 letter uppercase ICAO Code> <opt: new heigth in m>")
@@ -12,7 +12,8 @@ def printInfo():
     print ("If apt.dat includes several airports, select airport by ICAO-Code.")
     print ("Works for the moment only for single boundary without holes.")
     print ("The new heigt is either given as optional argument in meter or")
-    print ("it is derived from average height of vertices at boundary.")
+    print ("it is derived from average height of vertices to be adapted in/at boundary.")
+    print ("Given file is adapted. Original file is copied to file with ending \'.org\'.")
     print ("CAUTION: This is still a test-version. No warrenties/guaranties!")
     print ("         Existing .org files are overwritten!!!!!")
     print ("-------------------------------------------------------------------------")
@@ -96,6 +97,7 @@ def readBoundaryFromAPT(filename, icao_id = ""):
 ### MAIN ###
 newheight = None  #new height that should be applied not defined yet
 icao_id = ""      #icao code in case of searching apt.dat including several airports
+changedVertices = {} #dictionary of (lat, lon) tuples with all vertices changed in order to check for other vertices at same place
 
 try:
     dsffile = sys.argv[1]
@@ -128,6 +130,7 @@ dsf = XPLNEDSF()
 if dsf.read(dsffile): #returns value > 0 in case of errors
     sys.exit(3)
 
+
 print("Reading of dsf-file completed. Checking now for mesh triangles intersecting airport boundary.......", flush = True)
 miny, maxy, minx, maxx = dsf.BoundingRectangle(poly)
 s = set([])
@@ -149,15 +152,22 @@ for p in dsf.PatchesInArea(miny, maxy, minx, maxx):
             s.add((t[0][0], t[0][1])) #add all 3 vertices of tria to set as tuples
             s.add((t[1][0], t[1][1]))
             s.add((t[2][0], t[2][1]))
-print(len(s), "vertices of mesh found that belong to mesh triangles intersecting boundary.")
+print(len(s), "vertices of mesh found that belong to mesh triangles intersecting or within boundary.")
 
 count = 0
 sum = 0
 for v in s:
     count += 1
     sum += dsf.getElevation(dsf.V[v[0]][v[1]][0], dsf.V[v[0]][v[1]][1], dsf.V[v[0]][v[1]][2])
-averageheight = round(sum / count)
-print ("Average height of boundary vertexes:", averageheight)
+
+if count == 0:
+    print("Warning: As no vertices intersecting or within boundary found nothing to do. Stopping now.")
+    print("         Check that you have correct dsf and apt files.")
+    print("         Coordinates of boundary --  west:", minx, "east:", minx, "south:", miny, "north:", maxy)
+    print("         Coordinates of dsf file --  west:", dsf.Properties['sim/west'], "east:", dsf.Properties['sim/east'], "south:", dsf.Properties['sim/south'], "north:", dsf.Properties['sim/north'])
+    sys.exit(0)
+averageheight = round( sum / count)
+print ("Average height of vertexes in/at boundary:", averageheight)
 
 if newheight == None:
     newheight = averageheight
@@ -168,7 +178,25 @@ else:
 for v in s:
     print (dsf.V[v[0]][v[1]], "with height", dsf.getElevation(dsf.V[v[0]][v[1]][0], dsf.V[v[0]][v[1]][1], dsf.V[v[0]][v[1]][2]), "changed to: ", newheight )
     dsf.V[v[0]][v[1]][2] = newheight
+    changedVertices[(round(dsf.V[v[0]][v[1]][0], 7), round(dsf.V[v[0]][v[1]][1], 7))] = newheight
+print("Changed vertices for", len(changedVertices), "different coordinates.")
+print("As adapted triangles could have vertices outside boundary that are adapted now, also other vertices at such coordinates need to be adapted.")
+print("   Otherwise the mesh could have different heights at same coordinats that could also lead to holes.")
+print("   So checking again of patches/vertices in new adapted area.")
+miny, maxy, minx, maxx = dsf.BoundingRectangle(changedVertices)
+delta = 0.000001 #check also for vertexes 0.1m outside boundary
+count = 0
+for p in dsf.PatchesInArea(miny - delta, maxy + delta, minx - delta, maxx + delta): 
+    for t in p.triangles():
+        for v in t:
+            if (round(dsf.V[v[0]][v[1]][0], 7), round(dsf.V[v[0]][v[1]][1], 7)) in changedVertices:
+                if dsf.V[v[0]][v[1]][2] != newheight:
+                    print("Vertex at coordinates",dsf.V[v[0]][v[1]][0], dsf.V[v[0]][v[1]][1], "and height", dsf.getElevation(dsf.V[v[0]][v[1]][0], dsf.V[v[0]][v[1]][1], dsf.V[v[0]][v[1]][2]), "needs also adjustment!")
+                    dsf.V[v[0]][v[1]][2] = newheight
+                    count += 1
+print(count, "additional vertices have been changed to new height (only vertices no full triangles).")
 
+print("Completed adapting height of vertices now.")
 print("Renaming original dsf-file to:", dsffile)
 print("CAUTION: If you run this tool again this original file might be overwritten!")
 try:
@@ -178,3 +206,4 @@ except:
    sys.exit(1)
 print("Applied changes will now be written to:", dsffile)
 dsf.write(dsffile)
+print("Done.")
