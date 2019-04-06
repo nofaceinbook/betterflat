@@ -15,7 +15,7 @@ The new heigt is either given as optional argument in meter or it is derived fro
 
 **Installation:** Just download the two pyhton files and run it (python 3 needs to be installed on your computer)
 
-        **As I'm still improving the tool I would be happy for your comments**
+        As I'm still improving the tool I would be happy for your comments.
 
 
 ## Why should I use this tool
@@ -24,6 +24,7 @@ The new heigt is either given as optional argument in meter or it is derived fro
 * Much better than using flattenig option of X-Plane as only mesh triangles of airport area (depending on it's boundary) are changed and not hughe area as it is performed by X-Plane flattening
 * No need to convert to dsf-text files - this script runs directly on the binary dsf-file
 * Only standard libraries used meaning: download and run it directly
+* Using up to date python 3
 
 
 ## FAQ
@@ -37,7 +38,7 @@ You could run the tool several times always using a new boundary. Just copy the 
 ### Can I also flatten other areas of the dsf?
 Yes. Just create your own boundary for the area you want to have flattened and use this filename. Refer to example below.
 
-## How should a boundary file look like?
+### How should a boundary file look like?
 Just copy a boundary from an apt.dat file or create your own file that looks like:
 ```
 130 Airport Boundary 1
