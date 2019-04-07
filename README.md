@@ -7,7 +7,10 @@ Needs the included file xplnedsf.py for reading/writing dsf-files.
 **CAUTION:** Work in progress.... Use with it with care.
          Run scripts always on copies of your original dsf / apt files.
          
-**Usage:** betterflat <dsf-filename> <apt.dat including airport> <opt: 4 letter uppercase ICAO Code> <opt: new heigth in m>
+**Usage:** 
+```
+    betterflat <dsf-filename> <apt.dat including airport> <opt: 4 letter uppercase ICAO Code> <opt: new heigth in m>
+```
 
 Area to flatten is selected from airport boundary in 'apt.dat'. If apt.dat includes several airports, select airport by ICAO-Code.
 Works for the moment only for single boundary without holes.
