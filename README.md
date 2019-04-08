@@ -25,6 +25,7 @@ The new heigt is either given as optional argument in meter or it is derived fro
 * If you created a new airport where the underground is not flat
 * If you use a new mesh that is not prepared for that airport
 * Much better than using flattenig option of X-Plane as only mesh triangles of airport area (depending on it's boundary) are changed and not hughe area as it is performed by X-Plane flattening
+* You don't need to know and enter coordinates. They are directly taken from airport definition file (apt.dat)
 * No need to convert to dsf-text files - this script runs directly on the binary dsf-file
 * Only standard libraries used meaning: download and run it directly
 * Using up to date python 3
