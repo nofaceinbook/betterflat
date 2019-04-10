@@ -3,6 +3,11 @@
 GUI for betterflat   version 0.0.1
 by schmax 
 """
+############### IMPROVE FILE HEADER !!!!! ############
+
+
+############ ADD LOGGING MODULE !!!! #################
+######### Handle several boundaries !!!!!!! ###########
 
 from xplnedsf import *
 import os
@@ -13,6 +18,7 @@ from tkinter.filedialog import askopenfilename
 def displayHelp(win):
     newwin = Toplevel(win)
     Label(newwin, text="Display some information on the tool.....").grid(row=0, pady=10, padx=10)
+    ############# IMPROVE HELPT TEXT !!!! ###########################
     
 
 def readBoundaryFromAPT(filename, icao_id = ""):
@@ -93,7 +99,7 @@ def PointInPoly(p, poly): #test wether a point p with [lat, lon] coordinates lie
         return False #even number of intersection, so p outside poly
             
 
-def trias_intersect_boundary(dsf, poly):
+def vertices_of_boundary_intersecting_trias(dsf, poly):
 #
 # Identifies all mesh triangles of dsf file having an intersection with an edge of the boundary (poly with [lon, lat] coordinates)
 # or lie inside boundary (or single triangle in which boundary completely lies)
@@ -121,7 +127,20 @@ def trias_intersect_boundary(dsf, poly):
                 s.add((t[1][0], t[1][1]))
                 s.add((t[2][0], t[2][1]))
     print(len(s), "vertices of mesh found that belong to mesh triangles intersecting or within boundary.")
-    return s
+    changedVertices = {} #set up dictonary with all coords of changed vertices to find additional vertices at such coords for trias out of bound
+    for v in s:
+        changedVertices[(round(dsf.V[v[0]][v[1]][0], 7), round(dsf.V[v[0]][v[1]][1], 7))] = True #coords round to range of cm
+    miny, maxy, minx, maxx = dsf.BoundingRectangle(changedVertices)
+    delta = 0.000001 #check also for vertices 0.1m outside boundary
+    for p in dsf.PatchesInArea(miny - delta, maxy + delta, minx - delta, maxx + delta): 
+        for t in p.triangles():
+            for v in t:
+                if (round(dsf.V[v[0]][v[1]][0], 7), round(dsf.V[v[0]][v[1]][1], 7)) in changedVertices:
+                    s.add((v[0], v[1])) #add tuple of vertex at coords to make sure to get all vertices at the coords
+    print("References to vertices to be changed:", s)
+    print("Unique coords to be changed:", changedVertices)
+    return s, changedVertices
+
 
 def averageheight(dsf, vertices):
     count = 0
@@ -140,12 +159,13 @@ class bflatGUI:
         
         self.dsf = XPLNEDSF()  #includes all information about the read dsf-file
         self.boundary = []     #includes vertices of boundary
-        self.vertices = set([]) #set of vertices that should get new height
+        self.vertices = set([])#set of vertices that should get new height
+        self.dsfreadfile = ""  #name of the file that is stored in self.dsf
         
         self.window = Tk()
         self.window.title("X-Plane betterflat v0.1")
         
-        self.header = Label(self.window, text="Please select according files")
+        self.header = Label(self.window, text="Work with copies here to protect your original files!!")
         self.header.grid(row=0, column=0, columnspan=2)
         self.help_button = Button(self.window, text=' Help ', fg='red', command = lambda: displayHelp(self.window))
         self.help_button.grid(row=0, column=3, sticky=W, pady=4, padx=10)
@@ -219,7 +239,8 @@ class bflatGUI:
             self.apt_status_label.config(text="Boundary with {} vertices read.".format(len(self.boundary)))
             self.dsf_read.config(state="normal")
             
-    def read_dsf(self, filename):        
+    def read_dsf(self, filename):
+        self.dsfreadfile = filename        
         err = self.dsf.read(filename) #returns value > 0 in case of errors
         if err == 1:
             self.dsf_status_label.config(text = "Error: File not found!")
@@ -227,7 +248,7 @@ class bflatGUI:
             self.dsf_status_label.config(text = "Error: File is not correct dsf format! Might be 7zipped.")
         else:
             self.dsf_status_label.config(text = "DSF with {} pools of vertices and {} patches read.".format(len(self.dsf.V), len(self.dsf.Patches)))
-            self.vertices = trias_intersect_boundary(self.dsf, self.boundary)
+            self.vertices, coords = vertices_of_boundary_intersecting_trias(self.dsf, self.boundary)
             ah = averageheight(self.dsf, self.vertices)
             if ah == None:
                 self.result_label.config(text = "No mesh intersection found. Check that files are correct.")
@@ -235,14 +256,30 @@ class bflatGUI:
                 self.write_button.config(state="normal")
                 self.height_entry.delete(0, END)
                 self.height_entry.insert(0, ah)
-                self.result_label.config(text = "Identified {} vertices with average height {} to be adapted.".format(len(self.vertices), ah))
-            ######## MISSING TO ALSO CHANGE VERTICES AT SAME COORDINATES AS CHANGED ONES !!!!!!!!! #################
+                self.result_label.config(text = "{} vertices at {} coords with average height {} to be adapted.".format(len(self.vertices), len(coords), ah))
+                self.newdsf_entry.delete(0, END)
+                self.newdsf_entry.insert(0, filename)
+                self.bakdsf_entry.delete(0, END)
+                self.bakdsf_entry.insert(0, filename + ".bak")
         
     
     def write_dsf(self, newheight, dsffile, bakfile):
+        newheight = int(self.height_entry.get())
         print("Writing dsf file:", dsffile, "for height:", newheight, "and backup-file", bakfile)  ######### ADD CODE TO REALLY WRITE ##########
-        
-      
+        try:
+           os.replace(self.dsfreadfile, bakfile)
+        except:
+           print('Error:', self.dsfreadfile, 'can not be replaced!')
+           self.write_status_label.config(text = "Error: Original file {} can not be replaced!".format(self.dsfreadfile))
+        else:
+            for v in self.vertices:
+                print (self.dsf.V[v[0]][v[1]], "with height", self.dsf.getElevation(self.dsf.V[v[0]][v[1]][0], self.dsf.V[v[0]][v[1]][1], self.dsf.V[v[0]][v[1]][2]), "changed to: ", newheight )
+                self.dsf.V[v[0]][v[1]][2] = newheight            
+            self.write_status_label.config(text = "Wrtiting changes ...") ############### FLUSH missing !!!!!!!! ######
+            self.dsf.write(dsffile)
+            self.write_status_label.config(text = "Done.")
+            print("Done.")
+              
     def select_file(self, entry):
         filename = askopenfilename()
         entry.delete(0, END)
@@ -251,5 +288,3 @@ class bflatGUI:
    
 
 main = bflatGUI()
-
-
