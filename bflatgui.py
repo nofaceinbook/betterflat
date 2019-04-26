@@ -11,6 +11,7 @@ by schmax
 
 import logging
 from xplnedsf import *
+from bflatKMLexport import *
 import os
 from tkinter import *
 from tkinter.filedialog import askopenfilename
@@ -260,7 +261,8 @@ class bflatGUI:
         self.result_text.grid(row=6, column=0, sticky=E, pady=8)
         self.result_label = Label(self.window, text=" not yet")
         self.result_label.grid(row=6, column=1, sticky=W, pady=8)
-
+        self.kml_create = Button(self.window, text='.kml', state=DISABLED, command=lambda: kmlExport(self.dsf, self.boundaries, self.vertices, self.dsf_entry.get()))
+        self.kml_create.grid(row=6, column=3, sticky=W, pady=4, padx=10)
         self.height_label = Label(self.window, text="New height (in m):")
         self.height_label.grid(row=7, column=0, pady=4, sticky=E)
         self.height_entry = Entry(self.window, width=7)
@@ -334,6 +336,7 @@ class bflatGUI:
                 self.result_label.config(text="No mesh intersection found. Check that files are correct.")
             else:
                 self.write_button.config(state="normal")
+                self.kml_create.config(state="normal")
                 self.height_entry.delete(0, END)
                 self.height_entry.insert(0, ah)
                 self.result_label.config(
