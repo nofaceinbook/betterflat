@@ -26,7 +26,6 @@
 #******************************************************************************
 
 
-
 import os #required to retrieve length of dsf-file
 import struct #required for binary pack and unpack
 import hashlib #required for md5 hash in dsf file footer
@@ -88,12 +87,11 @@ class XPLNEraster: #Stores data of Raster Atoms (each dsf could have serverl ras
         
 
 class XPLNEDSF:   
-    def __init__(self, logname='XPLNEDSF', statusfunction = "stdout"):
-        if logname != "Re-Initialize-except-log-and-status":
-            self._log_ = logging.getLogger(logname + '.' + __name__) #use name of existing Logger in calling module to get logs in according format or change basicConfig for logs
-            self._DEBUG_ = True if self._log_.getEffectiveLevel() < 20 else False #have DEBUG value in order to call only logger for debug if DEBUG enabled  --> saves time
-            self._progress_ = [0, 0, 0] #progress as 3 list items (amount of bytes read/written in percant and shown, read/written but not yet shown as number of bytes) and number of bytes to be processed in total
-            self._statusfunction_ = statusfunction
+    def __init__(self, logname='__XPLNEDSF__', statusfunction = "stdout"):
+        if logname != "_keep_logger_": self._log_ = self._setLogger_(logname)
+        if statusfunction != "_keep_statusfunction_": self._statusfunction_ = statusfunction
+        self._DEBUG_ = True if self._log_.getEffectiveLevel() < 20 else False #have DEBUG value in order to call only logger for debug if DEBUG enabled  --> saves time
+        self._progress_ = [0, 0, 0] #progress as 3 list items (amount of bytes read/written in percant and shown, read/written but not yet shown as number of bytes) and number of bytes to be processed in total
         self._Atoms_ = {} #dictonary containg for every atom in file the according strings
         self._AtomStructure_ = {'DAEH' : ['PORP'], 'NFED' : ['TRET', 'TJBO', 'YLOP', 'WTEN', 'NMED'], 'DOEG' : ['LOOP', 'LACS', '23OP', '23CS'], 'SMED' : ['IMED', 'DMED'], 'SDMC' : []}
         self._AtomList_ = ['DAEH', 'NFED', 'DOEG', 'SMED', 'SDMC', 'PORP', 'TRET', 'TJBO', 'YLOP', 'WTEN', 'NMED', 'LOOP', 'LACS', '23OP', '23CS', 'IMED', 'DMED']
@@ -119,6 +117,19 @@ class XPLNEDSF:
         self.DefRasters = {}   #dictionary containing for each index number (0 to n-1) the name of Raster definition (for the moment assuing "elevaiton" is first with index 0)
         self._log_.info("Class XPLNEDSF initialized.")
 
+    def _setLogger_(self, logname):
+        if logname == '__XPLNEDSF__': #define default logger if nothing is set
+            logger = logging.getLogger('XPLNEDSF')
+            logger.setLevel('INFO')
+            logger.handlers = []  # Spyder/IPython currently does not remove existing loggers, this does the job
+            stream_handler = logging.StreamHandler()
+            stream_handler.setLevel('INFO')
+            formatter = logging.Formatter('%(levelname)s: %(message)s')
+            stream_handler.setFormatter(formatter)
+            logger.addHandler(stream_handler)
+        else:
+            logger = logging.getLogger(logname + '.' + __name__) #use name of existing Logger in calling module to get logs in according format or change basicConfig for logs
+        return logger
 
     def _updateProgress_(self, bytes): #updates progress with number of read/written bytes and calls show-function
         self._progress_[1] += bytes
@@ -625,7 +636,7 @@ class XPLNEDSF:
            
                     
     def read(self, file):   ###### NEXT STEP: Also read 7-ZIP FILES ###########
-        self.__init__("Re-Initialize-except-log-and-status") #make sure all values are initialized again in case additional read
+        self.__init__("_keep_logger_","_keep_statusfunction_") #make sure all values are initialized again in case additional read
         if not os.path.isfile(file):
             self._log_.error("File does not exist!".format(file))
             return 1
