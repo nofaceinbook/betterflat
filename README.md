@@ -1,4 +1,4 @@
-# Better Flatteninng for Airports for X-Plane
+# Better Flatteninng for X-Plane Airports
 Python 3 scripts that flattens a X-Plane dsf-file at the location of an airport.
 Needs the included file xplnedsf.py for reading/writing dsf-files.
 
