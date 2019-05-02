@@ -1,6 +1,10 @@
-# betterflat for X-Plane
-Python 3 script that flattens a X-Plane dsf-file at the location of an airport.
+# Better Flatteninng for Airports for X-Plane
+Python 3 scripts that flattens a X-Plane dsf-file at the location of an airport.
 Needs the included file xplnedsf.py for reading/writing dsf-files.
+
+**NEW**: The script bflat.py is a new GUI Version using tkinter. Usage should be self explainable. Just try.
+
+Following details are for the older non-GUI Version betterflat.py:
 
 **Note:** dsf-files might be 7-zipped. In that case you need to unzip it first with some 7zip tool.
 
@@ -45,6 +49,7 @@ Yes. Just create your own boundary for the area you want to have flattened and u
 ### How should a boundary file look like?
 Just copy a boundary from an apt.dat file or create your own file that looks like:
 ```
+1 <airport height in feet> 0 0 <icoa-id> <airport name>
 130 Airport Boundary 1
 111  50.41021599 -125.13696606
 111  50.40996632 -125.13692890
