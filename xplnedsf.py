@@ -1,9 +1,8 @@
 #******************************************************************************
 #
-# xplnedsf.py        Version 0.13
+# xplnedsf.py        Version 0.21
 # ---------------------------------------------------------
 # Python module for reading and writing X_Plane DSF files.
-#   (zipped DSF files have to be unzipped with 7-zip first!)
 #
 #
 # WARNIG: This code is still under development and may still have some errors.
@@ -26,10 +25,18 @@
 #******************************************************************************
 
 
-
 import os #required to retrieve length of dsf-file
 import struct #required for binary pack and unpack
 import hashlib #required for md5 hash in dsf file footer
+import logging #for output to console and/or file
+from io import BytesIO #required to go through bytes of a read 7ZIP-File
+
+try:
+    import py7zlib
+except ImportError:
+    PY7ZLIBINSTALLED = False
+else:
+    PY7ZLIBINSTALLED = True
 
 
 class XPLNEpatch:
@@ -72,8 +79,6 @@ class XPLNEpatch:
             elif c[0] == 31:  # PATCH FAN RANGE
                 for v in range(c[1], c[2] - 2): # at c[1] center point; last index has one added so -2 as we go 2 up and last in range is not counted
                     l.append( [ [p, c[1]], [p, v + 1], [p, v + 2] ] )                    
-            else:
-                print ("Error: Patch command not know/supported. Skipped it....") 
         return l
 
 
@@ -90,7 +95,11 @@ class XPLNEraster: #Stores data of Raster Atoms (each dsf could have serverl ras
         
 
 class XPLNEDSF:   
-    def __init__(self):
+    def __init__(self, logname='__XPLNEDSF__', statusfunction = "stdout"):
+        if logname != "_keep_logger_": self._log_ = self._setLogger_(logname)
+        if statusfunction != "_keep_statusfunction_": self._statusfunction_ = statusfunction
+        self._DEBUG_ = True if self._log_.getEffectiveLevel() < 20 else False #have DEBUG value in order to call only logger for debug if DEBUG enabled  --> saves time
+        self._progress_ = [0, 0, 0] #progress as 3 list items (amount of bytes read/written in percant and shown, read/written but not yet shown as number of bytes) and number of bytes to be processed in total
         self._Atoms_ = {} #dictonary containg for every atom in file the according strings
         self._AtomStructure_ = {'DAEH' : ['PORP'], 'NFED' : ['TRET', 'TJBO', 'YLOP', 'WTEN', 'NMED'], 'DOEG' : ['LOOP', 'LACS', '23OP', '23CS'], 'SMED' : ['IMED', 'DMED'], 'SDMC' : []}
         self._AtomList_ = ['DAEH', 'NFED', 'DOEG', 'SMED', 'SDMC', 'PORP', 'TRET', 'TJBO', 'YLOP', 'WTEN', 'NMED', 'LOOP', 'LACS', '23OP', '23CS', 'IMED', 'DMED']
@@ -114,8 +123,40 @@ class XPLNEDSF:
         self.DefPolygons = {}  #dictionary containing for each index number (0 to n-1) the name of Polygon definition file
         self.DefNetworks = {}  #dictionary containing for each index number (0 to n-1) the name of Network definition file; actually just one file per dsf-file
         self.DefRasters = {}   #dictionary containing for each index number (0 to n-1) the name of Raster definition (for the moment assuing "elevaiton" is first with index 0)
+        self._log_.info("Class XPLNEDSF initialized.")
 
+    def _setLogger_(self, logname):
+        if logname == '__XPLNEDSF__': #define default logger if nothing is set
+            logger = logging.getLogger('XPLNEDSF')
+            logger.setLevel('INFO')
+            logger.handlers = []  # Spyder/IPython currently does not remove existing loggers, this does the job
+            stream_handler = logging.StreamHandler()
+            stream_handler.setLevel('INFO')
+            formatter = logging.Formatter('%(levelname)s: %(message)s')
+            stream_handler.setFormatter(formatter)
+            logger.addHandler(stream_handler)
+        else:
+            logger = logging.getLogger(logname + '.' + __name__) #use name of existing Logger in calling module to get logs in according format or change basicConfig for logs
+        return logger
 
+    def _updateProgress_(self, bytes): #updates progress with number of read/written bytes and calls show-function
+        self._progress_[1] += bytes
+        if self._progress_[2] <= 0:
+            return 1 #size to be reached not set; no sense to track progress
+        currentprogress = round(100 * self._progress_[1] / self._progress_[2])
+        if currentprogress:
+            self._progress_[0] += currentprogress
+            if self._progress_[0] > 100:
+                self._progress_[0] = 100 #stopp at 100%
+                self._progress_[1] = 0
+            else:
+                self._progress_[1] -= int (currentprogress * self._progress_[2] / 100)
+            if self._statusfunction_ == "stdout":
+                print ('[{}%]'.format(self._progress_[0]), end='', flush = True)
+            elif self._statusfunction_ != None:
+                self._statusfunction_(self._progress_[0])
+    
+    
     def _TopAtomLength_(self, id): #calculates the lengthe of an AtomOfAtoms with name id including all sub-atoms
         l = 0
         for sub_id in self._AtomStructure_[id]:
@@ -156,28 +197,27 @@ class XPLNEDSF:
         l = self._GetStrings_(self._Atoms_['WTEN'])
         self.DefNetworks = dict(zip(range(len(l)), l))        
         l = self._GetStrings_(self._Atoms_['NMED'])
-        self.DefRasters = dict(zip(range(len(l)), l))        
+        self.DefRasters = dict(zip(range(len(l)), l))
+        self._updateProgress_(self._TopAtomLength_('NFED'))
+        
 
         
-    def _extractPools_(self, bit = 16, log = 1):
+    def _extractPools_(self, bit = 16):  
         if bit == 32:
-            if log:
-                print ("Start to unpack and extract", len(self._Atoms_['23OP']),  "pools (", bit,  "bit)...", flush = True)
+            self._log_.info("Start to unpack and extract {} pools ({} bit)...".format(len(self._Atoms_['23OP']), bit))
             atomstring = self._Atoms_['23OP']
             V = self.V32
             ctype = "<L"
             size = 4 #bytes read per coordinate in 32 bit pool
         else: #assuming the standard 16bit Pool case
-            if log:
-                print ("Start to unpack and extract", len(self._Atoms_['LOOP']),  "pools (", bit,  "bit)...")
+            self._log_.info("Start to unpack and extract {} pools ({} bit)...".format(len(self._Atoms_['LOOP']), bit))
             atomstring = self._Atoms_['LOOP']
             V = self.V
             ctype = "<H"
             size = 2 #bytes read per coordinate in 16 bit pool
         for s in atomstring: #goes through all Pools read; string s has to be unpacked
             nArrays, nPlanes = struct.unpack('<IB', s[0:5])
-            if log > 1:
-                print ("Pool number",len(V) ,"has", nArrays, "Arrays (vertices) with", nPlanes, "Planes (coordinates per vertex)! ")
+            if self._DEBUG_: self._log_.debug("Pool number {} has {} Arrays (vertices) with {} Planes (coordinates per vertex)!".format(len(V), nArrays, nPlanes))
             V.append([]) #the current pool starts empty
             for i in range(nArrays): ## span up multi-dimensional array for the new pool of required size (number of vertices in pool)
                 V[-1].append([])
@@ -185,10 +225,9 @@ class XPLNEDSF:
             for n in range(nPlanes):
                 encType, = struct.unpack('<B', s[pos : pos + 1])
                 pos += 1
-                if log > 1:
-                    print ("    Plane", n, "is encoded:", encType)
+                if self._DEBUG_: self._log_.debug("Plane {} is encoded: {}".format(n, encType))
                 if encType < 0 or encType > 3: #encoding not defined
-                    print ("Error: Stopping reading pool because not known encoding of plane!!!")
+                    self._log_.error("Stopp reading pool because not known encoding of plane found!!!")
                     return [] ##This means we return empty pool, which can be used to detect error        
                 i = 0  #counts how many arrays = vertices have been read in plane n
                 while i < nArrays:
@@ -215,6 +254,7 @@ class XPLNEDSF:
                 if encType == 1 or encType == 3: #values are also stored differenced
                     for i in range (1, nArrays):  
                         V[-1][i][n] = (V[-1][i][n] + V[-1][i-1][n]) % 65536  #undo differntiation and modulo for wrapping two byte unsigned integer 
+            self._updateProgress_(len(s))
 
 
     def _encodeRunLength_(self, l):  # yields runlength encoded value pairs of list l
@@ -241,10 +281,9 @@ class XPLNEDSF:
             yield(len(individuals), individuals)
         
     
-    def _encodePools_(self, log = 1): #overwrites current Pool atom with actual values of all vertices
+    def _encodePools_(self): #overwrites current Pool atom with actual values of all vertices
         ###### FOR THE MOMENT ONLY WORKING FOR 16 BIT POOLS !!!!!!!!! ################################
-        if log:
-            print ("Start to encode all pools... (read values of vertices are overwritten)", flush = True)
+        self._log_.info("Start to encode all pools... (read values of vertices are overwritten)")
         self._Atoms_['LOOP'] = [] #start new (future version also think of creating Pool atom in case it new dsf file will be created !!!!!!!!!!)
         ####### This version only stores pools in differentiated run-length encoding !!! #############
         ## Start with differentiation of all values ##
@@ -261,12 +300,13 @@ class XPLNEDSF:
                     encpool += struct.pack('<B', rlpair[0]) #encode runlength value
                     for v in rlpair[1]:
                         encpool += struct.pack('<H', v)
+            self._updateProgress_(len(encpool)) 
             self._Atoms_['LOOP'].append(encpool)
+        self._log_.info("Encoding of pools finished.")
  
 
-    def _extractScalings_(self, bit = 16, log = 1): #extract scaling values from atoms and writes them to according lists
-        if log:
-            print ("Start to unpack and extract all saclings of", bit, "bit pools...", flush = True)
+    def _extractScalings_(self, bit = 16): #extract scaling values from atoms and writes them to according lists
+        self._log_.info("Start to unpack and extract all saclings of {} bit pools.".format(bit))
         if bit == 32:
             atomstring = self._Atoms_['23CS']
             Scalings = self.Scal32
@@ -280,12 +320,11 @@ class XPLNEDSF:
                 Scalings[-1].append([m, o])
 
                 
-    def _scaleV_(self, bit = 16, reverse = False, log = 1): #applies scaling to the vertices stored in V and V32
-        if log:
-            if reverse:
-                print("Start to de-scale all", bit, "bit pools...", flush = True)
-            else:
-                print ("Start to scale all", bit, "bit pools...", flush = True)
+    def _scaleV_(self, bit = 16, reverse = False): #applies scaling to the vertices stored in V and V32
+        if reverse:
+            self._log_.info("Start to de-scale all {} bit pools.".format(bit))
+        else:
+            self._log_.info("Start to scale all {} bit pools.".format(bit))
         if bit == 32:
             V = self.V32
             Scalings = self.Scal32
@@ -294,22 +333,19 @@ class XPLNEDSF:
             Scalings = self.Scalings
             
         if len(V) != len(Scalings):
-            print ("Error: Amount of Scale atoms does not equal amount of Pools!!")
+            self._log_.error("Amount of Scale atoms does not equal amount of Pools!!")
             return 1
         for p in range(len(V)): #for all Pools
             if V[p] == []: ###There can exist empty pools that have to be skipped for scaling!!!
-                if log:
-                    print("Info: empty pool number", p, "not scaled!")
+                self._log_.info("Empty pool number {} not scaled!".format(p))
                 break
             if len(V[p][0]) != len(Scalings[p]): #take first vertex as example to determine number of coordinate planes in current pool
-                print ("Error: Amount of scale values for pool", p, "does not equal the number of coordinate planes!!!")
+                self._log_.error("Amount of scale values for pool {} does not equal the number of coordinate planes!!!".format(p))
                 return 2
             for n in range(len(Scalings[p])): #for all scale tuples for that pool = all coordinate planes in pool
-                if log > 1:
-                    print("Will now scale pool", p, "plane", n, "with multiplier:", Scalings[p][n][0], "and offset:", Scalings[p][n][1])                
+                if self._DEBUG_: self._log_.debug("Will now scale pool {} plane {} with multiplier: {} and offset: {}".format(p, n ,Scalings[p][n][0], Scalings[p][n][1]))                
                 if float(Scalings[p][n][0]) == 0.0:
-                    if log > 1:
-                        print ("    No! Plane will not be scaled because scale is 0 !!!!")
+                    if self._DEBUG_: self._log_.debug("   Plane will not be scaled because scale is 0!")
                     break
                 for v in range(len(V[p])): #for all vertices in current plane
                     if reverse: #de-scale vertices
@@ -318,17 +354,15 @@ class XPLNEDSF:
                         V[p][v][n] = (V[p][v][n] * Scalings[p][n][0] / 65535) + Scalings[p][n][1]  #scale vertex v in pool p for plane n with multiplyer and offset
                
                 
-    def _extractRaster_(self, log = 2):  #extracts alll rasters from atoms and stores them in list
-        if log:
-            print("Extracting", len(self._Atoms_['IMED'])," raster layers...", flush = True)
+    def _extractRaster_(self):  #extracts alll rasters from atoms and stores them in list
+        self._log_.info("Extracting {} raster layers...".format(len(self._Atoms_['IMED'])))
         if len(self._Atoms_['IMED']) != len(self._Atoms_['DMED']):
-            print("Error: Number of raster info atoms not equal to number of raster data atoms!!!")
+            self._log_.error("Number of raster info atoms not equal to number of raster data atoms!!!")
             return 1           
         for rn in range(len(self._Atoms_['IMED'])):
             R = XPLNEraster()
             R.ver, R.bpp, R.flags, R.width, R.height, R.scale, R.offset = struct.unpack('<BBHLLff', self._Atoms_['IMED'][rn])
-            if log > 1:
-                print ("Info of new raster layer:", R.ver, R.bpp, R.flags, R.width, R.height, R.scale, R.offset)
+            if self._DEBUG_: self._log_.debug("Info of new raster layer: {} {} {} {} {} {} {}".format(R.ver, R.bpp, R.flags, R.width, R.height, R.scale, R.offset))
             if R.flags & 1:  #signed integers to be read
                 if R.bpp == 1:
                     ctype = "<b"
@@ -337,7 +371,7 @@ class XPLNEDSF:
                 elif R.bpp == 4:
                     ctype = "<i"
                 else:
-                    print ("Error: not allowed bytes per pixel in Raster Definition!!!")
+                    self._log_.error("Not allowed bytes per pixel in Raster Definition!!!")
                     return 2
             elif R.flags & 2: #unsigned integers to be read
                 if R.bpp == 1:
@@ -347,13 +381,13 @@ class XPLNEDSF:
                 elif R.bpp == 4:
                     ctype = "<I"
                 else:
-                    print ("Error: not allowed bytes per pixel in Raster Definition!!!")
+                    self._log_.error("Not allowed bytes per pixel in Raster Definition!!!")
                     return 3
             elif not (R.flags & 1) and not (R.flags & 2): #neither first nor second bit set means that 4 byte float has to be read
                 if R.bpp == 4:
                     ctype ="<f"
                 else:
-                    print ("Error: not allowed bytes per pixel in Raster Definition!!!")
+                    self._log_.error("Not allowed bytes per pixel in Raster Definition!!!")
                     return 4
 
             for x in range(0, R.bpp * R.width, R.bpp): #going x-wise from east to west just the bytes per pixes
@@ -363,12 +397,14 @@ class XPLNEDSF:
                     v = v * R.scale + R.offset # APPLYING SCALE + OFFSET 
                     line.append(v) #the pixel appended is to a line from south to north (y-line)
                 R.data.append(line) #south to north lines are appended to each other
+                self._updateProgress_(R.bpp * R.width) #update progress with number of bytes per raster line
             self.Raster.append(R) #so raster list of list is returned to be indexed by [x][y]
+        self._log_.info("Finished extracting Rasters.")
    
-    def _unpackCMDS_(self, log=1):
+    def _unpackCMDS_(self):
         i = 0 #position in CMDS String
-        if log:
-            print ("Start unpacking of Commands", flush = True)
+        self._log_.info("Start unpacking of Commands.")
+        current100kBjunk = 1 #counts processed bytes in 100kB junks
         while i < len(self._Atoms_['SDMC']):
             id, = struct.unpack('<B', self._Atoms_['SDMC'][i : i+1])
             self.CMDS.append([id])
@@ -406,16 +442,17 @@ class XPLNEDSF:
                             windinglist.extend(y)
                         self.CMDS[-1].append(windinglist)
                 else: #command id not tretated here until now
-                    print ("Warning: ID", id, "not in CMDStrucuture --> not stored in list CMDS!!")
+                    self._log_.warning("Unknown command ID {} ignored!".format(id))
                     self.CMDS[-1] #delete already written id
-            if log > 2:    
-                print("CMD id", self.CMDS[-1][0], ":", self.CMDS[-1][1:], "(string pos next:", i, ")" )
-        if log:
-            print (len(self.CMDS) , "commands haven been unpacked.")
+            if self._DEBUG_: self._log_.debug("CMD id {}: {} (string pos next cmd: {})".format(self.CMDS[-1][0], self.CMDS[-1][1:], i))
+            if i > current100kBjunk * 100000:
+                self._updateProgress_(50000) #count only half of the length, other half by extractCMDS
+                current100kBjunk += 1
+        self._log_.info("{} commands haven been unpacked.".format(len(self.CMDS)))
 
 
-    def _extractCMDS_(self, log = 2): # extract CMDS and stores it as Mesh-Patches, Polygons, ...
-
+    def _extractCMDS_(self): # extract CMDS and stores it as Mesh-Patches, Polygons, ...
+        self._log_.info("Start to extract CMDS")
         for i in range(len(self.DefPolygons)):
             self.Polygons.append([]) #span list of empty lists for all defined poygon types
         for i in range(len(self.DefObjects)): ########## OBJECTS NOT TESTED YET !!!!!!!!!!!!!!!!!!!!!!!!!!######
@@ -430,7 +467,7 @@ class XPLNEDSF:
         defIndex = 0
         subroadtype = 0
         junctionoffset = 0
-
+        counter = 0
         for c in self.CMDS:
             if c[0] == 1: # new pool selection
                 poolIndex = c[1]
@@ -467,46 +504,59 @@ class XPLNEDSF:
                     self.Patches[-1].cmds.append( [1, poolIndex] ) #change pool with patch via according command
                     patchPoolIndex = poolIndex #now within patch also current pool will be used
                 if self.Patches[-1].defIndex != defIndex:
-                    print("Error: defIndex changed within patch")
+                    self._log_.error("Definition Index changed within patch. Aborted command extraction!")
                     return(1)
                 self.Patches[-1].cmds.append(c) 
+            counter += 1
+            if not counter % (int(len(self.CMDS)/50)): #after every 2% processed of commands update progress 
+                self._updateProgress_(round(len(self._Atoms_['SDMC']) / 100)) #count only half of the length, other half by unpackCMDS
+        self._log_.info("{} patches extracted from commands.".format(len(self.Patches)))
+        self._log_.info("{} different Polygon types including there definitions extracted from commands.".format(len(self.Polygons)))
+        self._log_.info("{} different Objects with placements coordinates extracted from commands.".format(len(self.Objects)))
+        self._log_.info("{} different Network subtypes extracted from commands (could include double count).".format(len(self.Networks)))
 
-        if log:
-            print(len(self.Patches), "Patches extracted from Commands.")
-            print(len(self.Polygons), "different Polygon types including there definitions extracted from Commands.")
-            print(len(self.Objects), "different Objects with placements coordinates extracted from Commands.")
-            print(len(self.Networks), "different Network subtypes extracted from Commands (could include double count).", flush = True)
 
-
-    def _unpackAtoms_(self, log = 1): #starts all functions to unpack and extract data froms strings in Atoms
-        if log:
-            print("Extracting properties and definitions ...", flush = True)
-        self._extractProps_()
-        self._extractDefs_()
+    def _unpackAtoms_(self): #starts all functions to unpack and extract data froms strings in Atoms
+        self._log_.info("Extracting properties and definitions.")
+        if 'PORP' in self._Atoms_:
+            self._extractProps_()
+        else:
+            self._log_.error("This dsf file has not properties defined!")
+        if 'NFED' in self._Atoms_:    
+            self._extractDefs_()
+        else:
+            self._log_.warning("This dsf file has no definitions.") 
         if 'IMED' in self._Atoms_:
-            self._extractRaster_(log)
+            self._extractRaster_()
         else:
-            print("Info: This dsf file has no raster layers.")
-        self._extractPools_(16, log)
-        self._extractScalings_(16, log)
-        self._scaleV_(16, False, log) #False that scaling is not reversed
+            self._log_.info("This dsf file has no raster layers.")
+        if 'LOOP' in self._Atoms_:
+            self._extractPools_(16)
+            self._extractScalings_(16)
+            self._scaleV_(16, False) #False that scaling is not reversed
+            self._updateProgress_(len(self._Atoms_['LACS']))
+        else:
+            self._log_.warning("This dsf file has no coordinate pools (16-bit) defined!") 
         if '23OP' in self._Atoms_:
-            self._extractPools_(32, log)
-            self._extractScalings_(32, log)
-            self._scaleV_(32, False, log) #False that scaling is not reversed
+            self._extractPools_(32)
+            self._extractScalings_(32)
+            self._scaleV_(32, False) #False that scaling is not reversed
+            self._updateProgress_(len(self._Atoms_['23CS']))
         else:
-            print("Info: This dsf file has no 32-bit pools.")
-        self._unpackCMDS_(log)
-        self._extractCMDS_(log)
+            self._log_.info("This dsf file has no 32-bit pools.")
+        if 'SDMC' in self._Atoms_:
+            self._unpackCMDS_()
+            self._extractCMDS_()
+        else:
+            self._log_.warning("This dsf file has no commands defined.")
         return 0
         
 
-    def _packAtoms_(self, log = 1): #starts all functions to write all variables to strings (for later been written to file)
-        if log:
-            print("Preparing data to be written to file.", flush = True)
-            print("    Info: This version only applies changes to POOL atoms (all other atoms are written as read)!", flush = True)
-        self._scaleV_(16, True, log) #de-scale again
-        self._encodePools_(log)
+    def _packAtoms_(self): #starts all functions to write all variables to strings (for later been written to file)
+        self._log_.info("Preparing data to be written to file.")
+        self._log_.info("This version only applies changes to POOL atoms (all other atoms are written as read)!")
+        self._scaleV_(16, True) #de-scale again 
+        self._encodePools_()
         return 0
 
             
@@ -514,17 +564,17 @@ class XPLNEDSF:
         if int(z) != -32768: #in case z vertex is different from -32768 than this is the right height and not taken from raster
             return z
         if "sim/west" not in self.Properties:
-            print("Error: Properties like sim/west not defined!!!")
+            self._log_.error("Cannot get elevation as properties like sim/west not defined!!!")
             return None
         if not (int(self.Properties["sim/west"]) <= x <= int(self.Properties["sim/east"])):
-            print ("Error: x coordinate is not within boundaries!!!")
+            self._log_.error("Cannot get elevation as x coordinate is not within boundaries!!!")
             return None
         if not (int(self.Properties["sim/south"]) <= y <= int(self.Properties["sim/north"])):
-            print ("Error: y coordinate is not within boundaries!!!")
+            self._log_.error("Cannot get elevation as y coordinate is not within boundaries!!!")
             return None
-        ### THIS VERSION IS ASSUMING THAT ELEVATION RASTER IS THE FIRST RASTER-LAYER (index 0), if it is not called "elevation" a warning is printed ###
+        ### THIS VERSION IS ASSUMING THAT ELEVATION RASTER IS THE FIRST RASTER-LAYER (index 0), if it is not called "elevation" a warning is raised ###
         if self.DefRasters[0] != "elevation":
-            print ("Warning: The first raster layer is not called elevation, but used to determine elevation!")
+            self._log_.warning("Warning: The first raster layer is not called elevation, but used to determine elevation!")
         x = abs(x - int(self.Properties["sim/west"])) * (self.Raster[0].width - 1) # -1 from widht required, because pixels cover also boundaries of dsf lon/lat grid
         y = abs(y - int(self.Properties["sim/south"])) * (self.Raster[0].height - 1) # -1 from height required, because pixels cover also boundaries of dsf lon/lat grid
         if self.Raster[0].flags & 4: #when bit 4 is set, then the data is stored post-centric, meaning the center of the pixel lies on the dsf-boundaries, rounding should apply
@@ -566,15 +616,14 @@ class XPLNEDSF:
         return [  [self.V[t[0][0]][t[0][1]][0], self.V[t[0][0]][t[0][1]][1]], [self.V [t[1][0]] [t[1][1]][0], self.V[t[1][0]][t[1][1]][1]],  [self.V[t[2][0]][t[2][1]][0], self.V[t[2][0]][t[2][1]][1]] ]
 
     
-    def PatchesInArea (self, latS, latN, lonW, lonE, log=1):
+    def PatchesInArea (self, latS, latN, lonW, lonE):
     #
     # returns a list of all patches in dsf, where the rectangle bounding of the patch intersects
     # the rectangle area defined by coordinates
     # Note: it could be the case that there is not part of the patch really intersecting the area but this
     #       functions reduces the amount of patches that have then carefully to be inspected e.g. for real intersections
     #
-        if log:
-            print("Start to find patches intersecting area SW (", latS, lonW, ") and NE (", latN, lonE, ") ...")
+        self._log_.info("Start to find patches intersecting area SW ({}, {}) and NE ({}, {}).".format(latS, lonW, latN, lonE))
         l = [] # list of patch-ids intersecting area
         count = 0
         for p in self.Patches:
@@ -582,42 +631,54 @@ class XPLNEDSF:
             for t in p.triangles(): #all triangles in each patch
                 v.extend(self.TriaVertices(t)) #so all vertices of the patch
             miny, maxy, minx, maxx = self.BoundingRectangle(v)
-            if log > 2:
-                print("Checking patch", count, "of", len(self.Patches), "which lies SW (", miny, minx, ") and NE (", maxy, maxx, ")" )
+            if self._DEBUG_: self._log_.debug("Checking patch {} of {} which lies in SW ({}, {}) and NE ({}, {}).".format(count, len(self.Patches), miny, minx, maxy, maxx))
             if not (minx < lonW and maxx < lonW): #x-range of box is not completeley West of area
                 if not (minx > lonE and maxx > lonE): #x-range of box is not completele East of area
                     if not (miny < latS and maxy < latS): #y-range is not completele South of area
                         if not (miny > latN and maxy > latN): #y-range is not conmpletele North of ares
                             l.append(p)  #so we have an intersection of box with area and append the patch index
-                            if log > 1:
-                                print ("Patch", count, "SW (", miny, minx, ") and NE (", maxy, maxx, ") does intersect.")
+                            if self._DEBUG_: self._log_.debug("Patch {} in SW ({}, {}) and NE ({}, {}) does intersect.".format(count, miny, minx, maxy, maxx))
             count += 1
-        if log:
-            print(len(l), "intersecting patches of", len(self.Patches), "patches found.")
+        self._log_.info("{} intersecting patches of {} patches found.".format(len(l), len(self.Patches)))
         return l
            
                     
-    def read(self, file, log=1):   ###### NEXT STEP: Also read 7-ZIP FILES ###########
+    def read(self, file):   ###### NEXT STEP: Also read 7-ZIP FILES ###########
+        self.__init__("_keep_logger_","_keep_statusfunction_") #make sure all values are initialized again in case additional read
         if not os.path.isfile(file):
-            print("Error: File", file, "does not exist!")
+            self._log_.error("File does not exist!".format(file))
             return 1
-        flength = os.stat(file).st_size #length of dsf-file   ## Error condition if file not existing --> return 1
+        flength = os.stat(file).st_size #length of dsf-file   
+        self._progress_ = [0, 0, flength] #initilize progress start for reading
         with open(file, "rb") as f:    ##Open Tile as binary fily for reading
-            if log:
-                print ("Opend file", file, "with", flength, "bytes.", flush = True)
-            bytes = f.read(12)
-            identifier, version = struct.unpack('<8sI',bytes)
+            self._log_.info("Opend file {} with {} bytes.".format(file, flength))
+            start = f.read(12)
+            if start.startswith(b'7z\xBC\xAF\x27\x1C'):
+                if PY7ZLIBINSTALLED:
+                    f.seek(0)
+                    archive = py7zlib.Archive7z(f)
+                    filedata = archive.getmember(archive.getnames()[0]).read()
+                    self._log_.info("File is 7Zip archive. Extracted and read file {} from archive with decompressed length {}.".format(archive.getnames()[0], len(filedata)))
+                    f.close()
+                    f = BytesIO(filedata)
+                    self._progress_ = [0, 0, len(filedata)] #set progress maximum to decompressed length
+                    flength = len(filedata) #also update to decompressed length
+                    start = f.read(12)
+                else:
+                    self._log_.error("File is 7Zip encoded! py7zlib not installed to decode.")
+                    return 2
+            identifier, version = struct.unpack('<8sI',start)
             if identifier.decode("utf-8") != "XPLNEDSF" or version != 1:
-                print ("File is no X-Plane dsf-file Version 1 !!!")  
-                return 2            
+                self._log_.error("File is no X-Plane dsf-file Version 1 !!!")  
+                return 3            
             while f.tell() < flength - 16: #read chunks until reaching last 16 bytes hash value
                 bytes = f.read(8)
                 atomID, atomLength = struct.unpack('<4sI',bytes)        
                 atomID = atomID.decode("utf-8")
-                if log > 1 and atomID in self._AtomStructure_.keys():
-                    print ("Reading top-level atom", atomID, "with length of", atomLength, "bytes.")
-                elif log > 2:
-                    print ("Reading atom", atomID, "with length of", atomLength, "bytes.")
+                if atomID in self._AtomStructure_.keys():
+                    if self._DEBUG_: self._log_.debug("Reading top-level atom {} with length of {} bytes.".format(atomID, atomLength))
+                else:
+                    if self._DEBUG_: self._log_.debug("Reading atom {} with length of {} bytes.".format(atomID, atomLength))
                 if atomID in self._AtomOfAtoms_:  
                     self._Atoms_[atomID] = [] #just keep notice in dictonary that atom of atoms was read
                 elif atomID in self._AtomList_:
@@ -630,50 +691,49 @@ class XPLNEDSF:
                         else:
                             self._Atoms_[atomID] = bytes #for single atoms there is just this string
                 else:
-                    print ("WARNING: Jumping over unknown Atom ID (reversed):", atomID, "with length", atomLength) ####SHOULD IN NEXT VERSION RAISE EXCEPTION
+                    self._log_.warning("Jumping over unknown Atom ID (reversed): {} with length {}!!".format(atomID, atomLength))
                     bytes = f.read(atomLength-8)
-                    #return 3               
-            if log > 1:
-                print("Reached FOOTER with Hash-Value:",f.read(16), flush = True)
-        self._unpackAtoms_(log)
+                    #return 4               
+            if self._DEBUG_: self._log_.debug("Reached FOOTER with Hash-Value: {}".format(f.read(16)))
+        self._log_.info("Finished pure file reading.")
+        self._unpackAtoms_()
         return 0 #file successfull read
 
     
-    def write(self, file, log=1): #writes data to dsf file with according file-name
-        self._packAtoms_(log) #first write values of Atom strings that below will written to file   
+    def write(self, file): #writes data to dsf file with according file-name
+        self._progress_[0] = 0
+        self._progress_[1] = 0 #keep original file length as goal to reach in progress[2]
+        self._packAtoms_() #first write values of Atom strings that below will written to file   
         m = hashlib.md5() #m will at the end contain the new md5 checksum of all data in file
         with open(file, "w+b") as f:    ##Open Tile as binary fily for writing and allow overwriting of existing file
-            if log:
-                print ("Write now DSF in file:", file, flush = True)  
+            self._log_.info("Write now DSF in file: {}".format(file)  )
             s = struct.pack('<8sI', 'XPLNEDSF'.encode("utf-8"),1)  #file header
             m.update(s)
             f.write(s)
             for k in self._Atoms_.keys():
                 if k in self._AtomOfAtoms_:
-                    if log > 1:
-                        print("Writing atom of atoms:", k, "with length:", self._TopAtomLength_(k), "bytes.")
+                    if self._DEBUG_: self._log_.debug("Writing atom of atoms {} with length {} bytes.".format(k, self._TopAtomLength_(k)))
                     s = struct.pack('<4sI', k.encode("utf-8"), self._TopAtomLength_(k)) # for AtomsOfAtoms just store header (id + length including sub-atoms)
                     m.update(s)
                     f.write(s)
                 elif k in self._MultiAtoms_:
                     for a in self._Atoms_[k]:
-                        if log > 2:
-                            print("Writing multi atom:", k, "with length:", len(a) + 8, "bytes.")
+                        if self._DEBUG_: self._log_.debug("Writing multi atom {} with length {} bytes.".format(k, len(a) + 8))
                         s = struct.pack('<4sI', k.encode("utf-8"), len(a) + 8) + a # add 8 for atom header length (id+length)
                         m.update(s)
                         f.write(s)
+                        self._updateProgress_(len(s))
                 else: #just single instance atom with plane data
-                        if log > 1 and k in self._AtomStructure_.keys():
-                            print("Writing top-level atom:", k, "with length:", len(self._Atoms_[k]) + 8, "bytes.")
-                        elif log > 2:
-                            print("Writing single atom:", k, "with length:", len(self._Atoms_[k]) + 8, "bytes.")
+                        if k in self._AtomStructure_.keys():
+                            if self._DEBUG_: self._log_.debug("Writing top-level atom {} with length {} bytes.".format(k, len(self._Atoms_[k]) + 8))
+                        else:
+                            if self._DEBUG_: self._log_.debug("Writing single atom {} with length {} bytes.".format(k, len(self._Atoms_[k]) + 8))
                         s = struct.pack('<4sI', k.encode("utf-8"), len(self._Atoms_[k]) + 8) + self._Atoms_[k] # add 8 for atom header length (id+length)
                         m.update(s)
-                        f.write(s)                    
-            if log > 1:
-                print ("New md5 value appended to file is:", m.digest())
+                        f.write(s) 
+                        self._updateProgress_(len(s))
+            if self._DEBUG_: self._log_.debug("New md5 value appended to file is: {}".format(m.digest()))
             f.write(m.digest())
-        if log:
-            print("  ...finshed writing dsf-file.", flush = True)
+        self._log_.info("Finshed writing dsf-file.")
         return 0
 
