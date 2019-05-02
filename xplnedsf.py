@@ -1,9 +1,8 @@
 #******************************************************************************
 #
-# xplnedsf.py        Version 0.20
+# xplnedsf.py        Version 0.21
 # ---------------------------------------------------------
 # Python module for reading and writing X_Plane DSF files.
-#   (zipped DSF files have to be unzipped with 7-zip first!)
 #
 #
 # WARNIG: This code is still under development and may still have some errors.
@@ -30,6 +29,15 @@ import os #required to retrieve length of dsf-file
 import struct #required for binary pack and unpack
 import hashlib #required for md5 hash in dsf file footer
 import logging #for output to console and/or file
+from io import BytesIO #required to go through bytes of a read 7ZIP-File
+
+try:
+    import py7zlib
+except ImportError:
+    PY7ZLIBINSTALLED = False
+else:
+    PY7ZLIBINSTALLED = True
+
 
 class XPLNEpatch:
     def __init__(self, flag, near, far, poolIndex, defIndex):
@@ -646,8 +654,19 @@ class XPLNEDSF:
             self._log_.info("Opend file {} with {} bytes.".format(file, flength))
             start = f.read(12)
             if start.startswith(b'7z\xBC\xAF\x27\x1C'):
-                self._log_.error("File is 7Zip encoded!")
-                return 2
+                if PY7ZLIBINSTALLED:
+                    f.seek(0)
+                    archive = py7zlib.Archive7z(f)
+                    filedata = archive.getmember(archive.getnames()[0]).read()
+                    self._log_.info("File is 7Zip archive. Extracted and read file {} from archive with decompressed length {}.".format(archive.getnames()[0], len(filedata)))
+                    f.close()
+                    f = BytesIO(filedata)
+                    self._progress_ = [0, 0, len(filedata)] #set progress maximum to decompressed length
+                    flength = len(filedata) #also update to decompressed length
+                    start = f.read(12)
+                else:
+                    self._log_.error("File is 7Zip encoded! py7zlib not installed to decode.")
+                    return 2
             identifier, version = struct.unpack('<8sI',start)
             if identifier.decode("utf-8") != "XPLNEDSF" or version != 1:
                 self._log_.error("File is no X-Plane dsf-file Version 1 !!!")  
