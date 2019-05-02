@@ -1,9 +1,25 @@
 # -*- coding: utf-8 -*-
-"""
-Created on Fri Apr 26 21:28:52 2019
+#******************************************************************************
+#
+# bflatKMLexport.py
+#        
+bflatKMLexport_VERSION = "0.2"
+# ---------------------------------------------------------
+# Python module for exporting mesh area to be flattened to KML-file.
+# This module is called by bflat.py (Tool for flattening X-Plane Mesh)
+#
+# For more details refert to GitHub: https://github.com/nofaceinbook/betterflat
 
-@author: Max
-"""
+# Copyright (C) 2019 by schmax (Max Schmidt)
+#
+# This code is distributed in the hope that it will be useful, but WITHOUT ANY
+# WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR 
+# A PARTICULAR PURPOSE.  See the GNU General Public License for more details.  
+#
+# A copy of the GNU General Public License is available at:
+#   <http://www.gnu.org/licenses/>. 
+#
+#******************************************************************************
 
 from xplnedsf import *
 import os
