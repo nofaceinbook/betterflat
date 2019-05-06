@@ -3,7 +3,7 @@
 #
 # bflat.py
 #        
-bflat_VERSION = "0.2.1"
+bflat_VERSION = "0.2.2"
 # ---------------------------------------------------------
 # Python GUI module for flattening a X-Plane mesh at a given airport.
 #
@@ -349,7 +349,7 @@ class bflatGUI:
         self.result_text.grid(row=7, column=0, sticky=E, pady=8)
         self.result_label = Label(self.window, text=" not yet")
         self.result_label.grid(row=7, column=1, sticky=W, pady=8)
-        self.kml_create = Button(self.window, text='.kml', state=DISABLED, command=lambda: kmlExport(self.dsf, self.boundaries, self.vertices, self.dsf_entry.get()))
+        self.kml_create = Button(self.window, text='.kml', state=DISABLED,  command=lambda: self.write_kml())
         self.kml_create.grid(row=7, column=3, sticky=W, pady=4, padx=10)
         self.height_label = Label(self.window, text="New height (in m):")
         self.height_label.grid(row=8, column=0, pady=4, sticky=E)
@@ -517,6 +517,17 @@ class bflatGUI:
                 self.bakdsf_entry.delete(0, END)
                 self.bakdsf_entry.insert(0, filename + ".bak")
         self.current_action = None
+
+    def write_kml(self):
+        if self.boundtype.get() == 'airport':
+            log.info("Writing kml data for airport boundary to file {}.".format(self.dsf_entry.get() + '.kml'))
+            kmlExport(self.dsf, self.boundaries, self.vertices, self.dsf_entry.get())
+        else:
+            bounds = []
+            for r in self.runways:
+                bounds.append(getRunwayBounds(r[0], r[1], r[2] + 2)) #add 2m width for shoulders
+            log.info("Writing kml data for runway boundary to file {}.".format(self.dsf_entry.get() + '.kml'))
+            kmlExport(self.dsf, bounds, self.vertices, self.dsf_entry.get())
 
     def write_dsf(self, newheight, dsffile, bakfile):
         self.current_action = 'write'
