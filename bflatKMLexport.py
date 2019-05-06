@@ -3,7 +3,7 @@
 #
 # bflatKMLexport.py
 #        
-bflatKMLexport_VERSION = "0.2"
+bflatKMLexport_VERSION = "0.2.2"
 # ---------------------------------------------------------
 # Python module for exporting mesh area to be flattened to KML-file.
 # This module is called by bflat.py (Tool for flattening X-Plane Mesh)
@@ -40,46 +40,48 @@ def kmlExport(dsf, boundaries, vertices, filename):
         f.write("<Style id=\"Area\"><LineStyle><color>ff0000ff</color><width>4</width></LineStyle><PolyStyle><fill>0</fill></PolyStyle></Style>\n")
         
         ########### Show boundaries as Areas ################
-        for boundary in boundaries:
-            miny, maxy, minx, maxx = dsf.BoundingRectangle(boundary)
+        all_bounds = []
+        for boundary in boundaries:     
             f.write("    <Placemark><name>Selected Area</name><styleUrl>#Area</styleUrl><Polygon><outerBoundaryIs><LinearRing><coordinates>\n")
             for p in boundary:
                 f.write("        {},{},0\n".format(p[0], p[1]))
             f.write("    </coordinates></LinearRing></outerBoundaryIs></Polygon></Placemark>\n")
+            all_bounds.extend(boundary)
         
-            pcount = 0
-            for p in dsf.PatchesInArea(miny, maxy, minx, maxx):
-                if p.flag == 1:
-                    flag = "PYS"
+        miny, maxy, minx, maxx = dsf.BoundingRectangle(all_bounds)
+        pcount = 0
+        for p in dsf.PatchesInArea(miny, maxy, minx, maxx):
+            if p.flag == 1:
+                flag = "PYS"
+            else:
+                flag = "OVL"
+            terrain = dsf.DefTerrains[p.defIndex]
+            if "Water" in terrain:
+                style = "Water"
+            elif "grass" in terrain:
+                style = "grass"
+            else:
+                style = "ELSE"
+                
+            f.write("<Folder><name>Patch {} ({}): {}</name>\n".format(pcount, flag, terrain))
+            tcount = 0
+            saved_style = style #saved as style might be temporarely changed
+            for t in p.triangles():
+                if (t[0][0], t[0][1]) in vertices and (t[1][0], t[1][1]) in vertices and (t[2][0], t[2][1]) in vertices:
+                    style = "FLAT" #if all vertices of current triangle are in vertices where height is adapted, then triangle is flattened
                 else:
-                    flag = "OVL"
-                terrain = dsf.DefTerrains[p.defIndex]
-                if "Water" in terrain:
-                    style = "Water"
-                elif "grass" in terrain:
-                    style = "grass"
-                else:
-                    style = "ELSE"
-                    
-                f.write("<Folder><name>Patch {} ({}): {}</name>\n".format(pcount, flag, terrain))
-                tcount = 0
-                saved_style = style #saved as style might be temporarely changed
-                for t in p.triangles():
-                    if (t[0][0], t[0][1]) in vertices and (t[1][0], t[1][1]) in vertices and (t[2][0], t[2][1]) in vertices:
-                        style = "FLAT" #if all vertices of current triangle are in vertices where height is adapted, then triangle is flattened
-                    else:
-                        style = saved_style #set back to original style
-                    f.write("    <Placemark><name>Tria {}</name><styleUrl>#{}</styleUrl><Polygon><outerBoundaryIs><LinearRing><coordinates>\n".format(tcount, style))
-                    v = dsf.TriaVertices(t)
-                    h = [] #stores heigth of vertices in triangles
-                    h.append(int(dsf.getElevation(v[0][0], v[0][1], dsf.V[t[0][0]][t[0][1]][2])))  #3rd Value is height from Vertex to be consideredn in case differnet from -32xxx
-                    h.append(int(dsf.getElevation(v[1][0], v[1][1], dsf.V[t[1][0]][t[1][1]][2])))
-                    h.append(int(dsf.getElevation(v[2][0], v[2][1], dsf.V[t[2][0]][t[2][1]][2])))
-                    f.write("        {0},{1},{2} {3},{4},{5} {6},{7},{8} {0},{1},{2}\n".format(v[0][0], v[0][1], h[0], v[1][0], v[1][1], h[1], v[2][0], v[2][1], h[2]))
-                    f.write("    </coordinates></LinearRing></outerBoundaryIs></Polygon></Placemark>\n")
-                    tcount += 1
-                f.write("</Folder>\n")
-                pcount += 1
+                    style = saved_style #set back to original style
+                f.write("    <Placemark><name>Tria {}</name><styleUrl>#{}</styleUrl><Polygon><outerBoundaryIs><LinearRing><coordinates>\n".format(tcount, style))
+                v = dsf.TriaVertices(t)
+                h = [] #stores heigth of vertices in triangles
+                h.append(int(dsf.getElevation(v[0][0], v[0][1], dsf.V[t[0][0]][t[0][1]][2])))  #3rd Value is height from Vertex to be consideredn in case differnet from -32xxx
+                h.append(int(dsf.getElevation(v[1][0], v[1][1], dsf.V[t[1][0]][t[1][1]][2])))
+                h.append(int(dsf.getElevation(v[2][0], v[2][1], dsf.V[t[2][0]][t[2][1]][2])))
+                f.write("        {0},{1},{2} {3},{4},{5} {6},{7},{8} {0},{1},{2}\n".format(v[0][0], v[0][1], h[0], v[1][0], v[1][1], h[1], v[2][0], v[2][1], h[2]))
+                f.write("    </coordinates></LinearRing></outerBoundaryIs></Polygon></Placemark>\n")
+                tcount += 1
+            f.write("</Folder>\n")
+            pcount += 1
         
         f.write("</Document></kml>\n")
         
