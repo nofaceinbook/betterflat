@@ -14,7 +14,7 @@ are flattened to a height you can define. You also have the option to just flatt
 * Depending on installed version the tool also operates on zipped dsf-files.
 * Supports export of airport mesh area to kml-file. So you can check which mesh triangles will be flattened e.g. with Google Earth.
 
-##Installation
+## Installation
 For Windows you can just download and run the bflat.exe that includes all you need. This version will also read 7zipped dsf-fils directly. 
 For other systems you download all the Pyhton 3 scripts: bfalt.py, xlpnedsf.py, bflatKMLexport.py. 
 The scripts all run with standard libraries. Optional you can install pylzma (https://github.com/fancycode/pylzma)  
