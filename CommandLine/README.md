@@ -1,11 +1,7 @@
 # Better Flatteninng for X-Plane Airports
+# (Old Command Line Version)
 Python 3 scripts that flattens a X-Plane dsf-file at the location of an airport.
 Needs the included file xplnedsf.py for reading/writing dsf-files.
-
-**NEW**: The script bflat.py is a new GUI Version using tkinter. Usage should be self explainable. Just try.
-For Win64 you can now also directly download an executable conaining all you need.
-
-Following details are for the older non-GUI Version betterflat.py:
 
 **Note:** dsf-files might be 7-zipped. In that case you need to unzip it first with some 7zip tool.
 
