@@ -1,6 +1,6 @@
 #******************************************************************************
 #
-# xplnedsf.py        Version 0.21
+# xplnedsf.py        Version 0.23
 # ---------------------------------------------------------
 # Python module for reading and writing X_Plane DSF files.
 #
@@ -39,6 +39,19 @@ else:
     PY7ZLIBINSTALLED = True
 
 
+def isPointInTria(p, t):
+    denom = ((t[1][1] - t[2][1])*(t[0][0] - t[2][0]) + (t[2][0] - t[1][0])*(t[0][1] - t[2][1]))
+    if denom == 0: ### to be checked when this is the case!!!!
+        return 0
+    nom_a = ((t[1][1] - t[2][1])*(p[0] - t[2][0]) + (t[2][0] - t[1][0])*(p[1] - t[2][1]))
+    nom_b = ((t[2][1] - t[0][1])*(p[0] - t[2][0]) + (t[0][0] - t[2][0])*(p[1] - t[2][1]))
+    a = nom_a / denom
+    b = nom_b / denom
+    c = 1 - a - b
+    return (0 <= a <= 1 and 0 <= b <= 1 and 0 <= c <= 1)
+
+
+
 class XPLNEpatch:
     def __init__(self, flag, near, far, poolIndex, defIndex):
         self.flag = flag
@@ -46,6 +59,11 @@ class XPLNEpatch:
         self.far = far
         self.defIndex = defIndex
         self.cmds = []
+        self.trias = []  ###### NEW: store triangles calculated with triangles()
+        self.minx = 181  #set out of bound values first  #### NEW ####
+        self.maxx = -181 #will be set to bounding rectangle values for patch
+        self.miny = 91   #to quickly see if the patch applies for a certain ares
+        self.maxy = -91  #values set correctly with function _setPatchBoundary()_ after being read  
     def triangles(self): #returns triangles as a list l of [3 x vertexes] that are defined by commands c of thte patch where each vertex of triangle is a pair of index to pool p and vertex        
         l = []
         p = None #current pool needs to be defined with first command
@@ -80,6 +98,95 @@ class XPLNEpatch:
                 for v in range(c[1], c[2] - 2): # at c[1] center point; last index has one added so -2 as we go 2 up and last in range is not counted
                     l.append( [ [p, c[1]], [p, v + 1], [p, v + 2] ] )                    
         return l
+              
+    def trias2cmds(self):  ##MISSING is support of FAN !!! ##############
+        self.cmds = []
+        samePool = None
+        i = 0
+        c = []
+        
+        
+        while i < len(self.trias):
+            c.append([ self.trias[i][0][0], self.trias[i][0][1], self.trias[i][1][0], self.trias[i][1][1], self.trias[i][2][0], self.trias[i][2][1] ]) #set first tria in command
+            if i < len(self.trias) - 1 and self.trias[i][1] == self.trias[i+1][0] and self.trias[i][2] == self.trias[i+1][1]: #STRIP (strip can not start with last tria)
+                c[-1].insert(0, 27) #insert command id for strip
+                i += 1
+                while i < len(self.trias) and self.trias[i][0] == self.trias[i-1][1] and self.trias[i][1] == self.trias[i-1][2]: #continue as long as strip
+                    c[-1].extend(self.trias[i][2])
+                    i += 1
+            else: #NORMAL TRIANGLES
+                c[-1].insert(0, 24) #insert command id for normal tringle command
+                i += 1
+                while i < len(self.trias) and self.trias[i][0] != self.trias[i-1][1] and self.trias[i][1] != self.trias[i-1][2]: #continue as long as triangle
+                    c[-1].extend([ self.trias[i][0][0], self.trias[i][0][1], self.trias[i][1][0], self.trias[i][1][1], self.trias[i][2][0], self.trias[i][2][1] ])
+                    i += 1            
+
+        for e in c:            
+            spid = [1, 1] #have all values doubled that spid list has same length as command list that has for the moment allways pool id and vertex id
+            for i in range(len(e) - 4, -1, -2):
+                if e[i] == e[i+2]:
+                    spid.extend([spid[-1] + 1, spid[-1] + 1])
+                else:
+                    spid.extend([1, 1])
+            spid.append(0) #this value is for the command id
+            spid.reverse()
+            #print(e)
+            #print(spid)
+            #print("----")
+            if e[0] == 24: #Check for same pool chunks in simple TRIAs
+                i = 1
+                while i < len(e): 
+                    if spid[i] >= 6: #SAME Pool for at least following 6 vertices
+                        if samePool != e[i]:
+                            samePool = e[i]
+                            self.cmds.append([1,e[i]]) #set COMMAND definition of the common pool 
+                        self.cmds.append([e[0] - 1]) #SET TRIA SAME POOL OR STRIP SAME POOL (this is commmand id - 1)
+                        while i <= len(e)-6 and spid[i] >= 3:
+                            self.cmds[-1].extend([e[i+1], e[i+3], e[i+5]])
+                            i += 6 #next full tria
+                    else:
+                        self.cmds.append([e[0]]) #we stay with different pool command
+                        while i <= len(e)-6 and spid[i] < 6:
+                            self.cmds[-1].extend([e[i], e[i+1], e[i+2], e[i+3], e[i+4], e[i+5]])
+                            i += 6 #next full tria
+            else: #Check for same pool chunks in STRIP // tbd: FOR THE MOMENT JUST IF COMPLETE COMMAND IS SAME POOL !!!1 ###########
+                if spid[1] == int( (len(e) - 1) / 2):
+                    if samePool != e[i]:
+                        samePool = e[i]
+                        self.cmds.append([1,e[i]]) #set COMMAND definition of the common pool 
+                    self.cmds.append([e[0] - 1]) #SET TRIA SAME POOL OR STRIP SAME POOL (this is commmand id - 1)
+                    for i in range(2, len(e), 2):
+                        self.cmds[-1].append(e[i])
+                else:
+                    self.cmds.append(e)
+
+ #       for sc in c:       ##### TBD: Break command if same pool for longer period ####    ##### TBD: MAXIMUM LISTS OF 255 Trias !!!! #############
+ #           vids = [sc[2]]
+ #           for i in range(3, len(sc), 2):
+ #               if sc[i] == sc[i-2]:
+ #                   vids.append(sc[i+1])
+ #               else:
+ #                   break
+ #           if len(sc) == 2 * len(vids) + 1:
+ #               if samePool != sc[1]:
+ #                   samePool = sc[1]
+ #                   self.cmds.append([1,sc[1]]) #set COMMAND definition of the common pool 
+ #               self.cmds.append([sc[0] - 1]) #SET TRIA SAME POOL OR STRIP SAME POOL (this is commmand id - 1)
+ #               self.cmds[-1].extend(vids)
+ #           else: #leave command as it was, no same pool
+ #               self.cmds.append(sc)
+                
+        for i in range(len(self.cmds)): #Check for Ranges
+            if self.cmds[i][0] == 23 or self.cmds[i][0] == 26: #TRIA or STRIP SAME POOL
+                for j in range(2, len(self.cmds[i])):
+                    if self.cmds[i][j] != self.cmds[i][j-1] + 1:
+                        j = -1 #make sure that not get range when break happens at last vertex
+                        break
+                if j == len(self.cmds[i]) - 1: #RANGE
+                    self.cmds[i] = ([self.cmds[i][0] + 2 , self.cmds[i][1], self.cmds[i][1] + j ]) #change command id to range by adding 2                
+                
+        for i in range(len(self.cmds)): ######## TBD: Break up Commands with more then 255 tria definitions (not for ranges)
+            if len(self.cmds[i]) > 255*3: print ("WARNING: Length of command", i, "is", self.cmds[i], "and might be too long!!!!!")
 
 
 class XPLNEraster: #Stores data of Raster Atoms (each dsf could have serverl raster layers)
@@ -107,6 +214,7 @@ class XPLNEDSF:
         self._MultiAtoms_ = ['LOOP', 'LACS', '23OP', '23CS', 'IMED', 'DMED'] #These Atoms can occur severl times and therefore are stored as list in self._Atoms_
         self._CMDStructure_ = {1 : ['H'], 2 : ['L'], 3 : ['B'], 4 : ['H'], 5 : ['L'], 6 : ['B'], 7 : ['H'], 8 : ['HH'], 9 : ['', 'B', 'H'], 10 : ['HH'], 11 : ['', 'B', 'L'], 12 : ['H', 'B', 'H'], 13 : ['HHH'], 15 : ['H', 'B', 'H'], 16 : [''], 17 : ['B'], 18 : ['Bff'], 23 : ['', 'B', 'H'], 24 : ['', 'B', 'HH'], 25 : ['HH'], 26 : ['', 'B', 'H'], 27 : ['', 'B', 'HH'], 28 : ['HH'], 29 : ['', 'B', 'H'], 30 : ['', 'B', 'HH'], 31 : ['HH'], 32 : ['', 'B', 'c'], 33 : ['', 'H', 'c'], 34 : ['', 'L', 'c']}
         self._CMDStructLen_ = {1 : [2], 2 : [4], 3 : [1], 4 : [2], 5 : [4], 6 : [1], 7 : [2], 8 : [4], 9 : [0, 1, 2], 10 : [4], 11 : [0, 1, 4], 12 : [2, 1, 2], 13 : [6], 15 : [2, 1, 2], 16 : [0], 17 : [1], 18 : [9], 23 : [0, 1, 2], 24 : [0, 1, 4], 25 : [4], 26 : [0, 1, 2], 27 : [0, 1, 4], 28 : [4], 29 : [0, 1, 2], 30 :  [0, 1, 4], 31 : [4], 32 : [0, 1, 1], 33 : [0, 2, 1], 34 : [0, 4, 1]}
+        self._newPoolIndex_ = None ### NEW: index where newly created pools start in self.V
         self.CMDS = [] #unpacked commands
         self.Patches = [] #mesh patches, list of objects of class XPLNEpatch
         self.V = [] # 3 dimensional list of all vertices whith V[PoolID][Vertex][xyz etc coordinates]
@@ -480,16 +588,19 @@ class XPLNEDSF:
             elif 7 <= c[0] <= 8: #Object Command
                 self.Objects[defIndex].append([poolIndex]) #new Polygond added for defIndex type and it starts with poolIndex from which its vertices are
                 self.Objects[defIndex][-1].extend(c) #followed by the complete command to build it
-            elif 9 <= c[0] <= 11: #Network Commands
+            elif 9 <= c[0] <= 11: #Network Commands ######################### NEW: each Network command put in sublists, addtional [] inclueded !!!! ################## NEW next 5 lines ##########
                 if self.Networks == []: #first network command, so start with first entry
-                    self.Networks.append([subroadtype, junctionoffset, poolIndex])
-                elif self.Networks[-1][0] != subroadtype or self.Networks[-1][1] != junctionoffset or self.Networks[-1][2] != poolIndex: #chang of relevant base settings
-                    self.Networks.append([subroadtype, junctionoffset, poolIndex]) #sp new entry with new base-settings
-                self.Networks[-1].extend(c) #append complete command to build this network part on current base settings
+                    self.Networks.append([[subroadtype, junctionoffset, poolIndex]])
+                elif self.Networks[-1][0][0] != subroadtype or self.Networks[-1][0][1] != junctionoffset or self.Networks[-1][0][2] != poolIndex: #chang of relevant base settings
+                    self.Networks.append([[subroadtype, junctionoffset, poolIndex]]) #sp new entry with new base-settings
+                self.Networks[-1].extend([c]) #append complete command to build this network part on current base settings
             elif 12 <= c[0] <= 15: #Polygon Commands
                 self.Polygons[defIndex].append([poolIndex]) #new Polygond added for defIndex type and it starts with poolIndex from which its vertices are
                 self.Polygons[defIndex][-1].extend(c) #followed by the complete command to build it
             elif 16 <= c[0] <= 18:  # Add new Terrain Patch
+                if self.Patches != []: #write trias of privous ptach  ########## NEW #######
+                    self.Patches[-1].trias = self.Patches[-1].triangles()  #### NEW ###
+                    self._setPatchBoundary_(self.Patches[-1]) #sets min/max values of patch #### NEW ###
                 patchPoolIndex = None #poolIndex for new patch needs to be set as first command
                 if c[0] == 17: # New Patch with new physical flag
                     flag_physical = c[1]
@@ -508,8 +619,10 @@ class XPLNEDSF:
                     return(1)
                 self.Patches[-1].cmds.append(c) 
             counter += 1
-            if not counter % (int(len(self.CMDS)/50)): #after every 2% processed of commands update progress 
-                self._updateProgress_(round(len(self._Atoms_['SDMC']) / 100)) #count only half of the length, other half by unpackCMDS
+            ##TO BE UPDATED!!##if not counter % (int(len(self.CMDS)/50)): #after every 2% processed of commands update progress  --> RAISES ERROR when less than 50 CMDS
+                #####TO BE UPDATED##self._updateProgress_(round(len(self._Atoms_['SDMC']) / 100)) #count only half of the length, other half by unpackCMDS
+        ####TO BE UPDATED#### self.Patches[-1].trias = self.Patches[-1].triangles() #write trias of last patch read ##### NEW ########  ---> Raises error when dsf includes no Patch
+        ####TO BE UPDATED### self._setPatchBoundary_(self.Patches[-1]) #sets min/max values of patch #### NEW ### ---> Raises error when dsf includes no Patch
         self._log_.info("{} patches extracted from commands.".format(len(self.Patches)))
         self._log_.info("{} different Polygon types including there definitions extracted from commands.".format(len(self.Polygons)))
         self._log_.info("{} different Objects with placements coordinates extracted from commands.".format(len(self.Objects)))
@@ -558,7 +671,64 @@ class XPLNEDSF:
         self._scaleV_(16, True) #de-scale again 
         self._encodePools_()
         return 0
-
+    
+    def _setPatchBoundary_(self, p): #sets min/max values of patch p          ################ NEW #############
+        for t in p.trias:
+            for v in t: #all vertexes of each triangle in patch
+                if self.V[v[0]][v[1]][0] < p.minx:
+                    p.minx = self.V[v[0]][v[1]][0]
+                if self.V[v[0]][v[1]][0] > p.maxx:
+                    p.maxx = self.V[v[0]][v[1]][0]
+                if self.V[v[0]][v[1]][1] < p.miny:
+                    p.miny = self.V[v[0]][v[1]][1]
+                if self.V[v[0]][v[1]][1] > p.maxy:
+                    p.maxy = self.V[v[0]][v[1]][1]
+        #####################self._log_.info("Patch Boundary x between {} - {} and y between {} - {}.".format(p.minx, p.maxx, p.miny, p.maxy))
+        return 0
+                                          
+    
+    def _addVertexToPool_(self, v): #adds Vertex v to Pools V   v=[1,2,3] or v=[[1], [2], [3])???        ################# NEW ############
+        ## returns tuple (Pool_ID, index)
+        ### assumes that no different Pools for different height are needed (should all be with 1.000 m height difference)
+        ### assumes that maximum limit of 64.000 vertices per pool is not reached
+        if self._newPoolIndex_ == None:
+            self._newPoolIndex_ = len(self.V)
+            self.V.append(v)  ##to be tested!!! depends on v
+            self._log_.info("Created FIRST new Pool with index {} and first vertex {}".format(self._newPoolIndex_, self.V[_newPoolIndex_][0]))
+            return (self._newPoolIndex_, 0)
+        for i in range(self._newPoolIndex_, len(self.V)): ## go through all created pools
+            if len(self.V[i][0]) == len(v): ###??? depends on v  
+                for j in range(len(self.V[i])): #check if v is already in list
+                    if self.V[i][j] == v: ### to be checked if comparision is so simple
+                        return (i, j)
+                self.V[i].append(v) ### to be tested see, above
+                return (i, len(self.V[i]) - 1)
+        ### NEXT STEP: CREATE HERE NEW Pool for that array length
+        ###### ALSO CREATE SCALINGS FOR NEW POOLS!!!! AND CHECK THAT NEW VERTICES FIT FOR THAT SCALING
+        
+    def insertVertex(self, v): #adds new vertex to dsf and updates mesh accordingly   ########### NEW ###########
+        l = []
+        for p in self.Patches:
+            if p.minx <= v[0] <= p.maxx and p.miny <= v[1] <= p.maxy:
+                l.append(p)
+        self._log_.info("Vertex {} relevant in {} patches.".format(v, len(l)))
+        if len(l) == 0:
+            self._log_.error("Vertex {} cannot be inserted as there is no valid Patch found. Check coordinates!".format(v))
+            return 1
+        for p in l: #now go only through potential patches to check details
+            for t in p.trias:
+                if isPointInTria(v, self.TriaVertices(t)):
+                    self._log_.info("Vertex {} lies in tria {}.".format(v, self.TriaVertices(t)))
+                    ### Next step adpat tria if v is not too close to border (then change order) or to close to tria-vertex (then skip)
+        return 0
+        ## returns nothin, except errors??
+        ## better add list of vertices at same time ???
+        # 1) get patchesInArea for v -->> store area with patches to avoid re-calculation every time
+        # 2) go through all trias in these patches and check if v lies in tria (use point in poly function in blfat); if none found --> error (out of 1 by 1 degree tile?)
+          # 3) calculate S/T coordinates base on S/T of tria // in this version just take normal vector same as of tria (problem only for meshes without raster)
+          # 4) add vertex to Pool (Patch/coords of vertices of tria say how many coordinates are required )
+          # 5) replace tria with 3 new ones in right order in patch.tiras list
+        ###### ==> check if correct with kmlExport that uses patch.tiras list instad of trinangles() funciton
             
     def getElevation(self, x, y, z = -32768): #gets Elevation at point (x,y) from raster grid Elevation
         if int(z) != -32768: #in case z vertex is different from -32768 than this is the right height and not taken from raster
@@ -612,11 +782,11 @@ class XPLNEDSF:
         return miny, maxy, minx, maxx
 
 
-    def TriaVertices(self, t): #returns 3 vertices of triangle as list of [lon, lat] pairs
+    def TriaVertices(self, t): #returns 3 vertices of triangle as list of [lon, lat] pairs  ############# TBD: CHECK WHERE NEEDED !!! ################
         return [  [self.V[t[0][0]][t[0][1]][0], self.V[t[0][0]][t[0][1]][1]], [self.V [t[1][0]] [t[1][1]][0], self.V[t[1][0]][t[1][1]][1]],  [self.V[t[2][0]][t[2][1]][0], self.V[t[2][0]][t[2][1]][1]] ]
 
     
-    def PatchesInArea (self, latS, latN, lonW, lonE):
+    def PatchesInArea (self, latS, latN, lonW, lonE):  #################### TBD: Adapt to new trias list and min/max stored with patch !!!!! ##########################
     #
     # returns a list of all patches in dsf, where the rectangle bounding of the patch intersects
     # the rectangle area defined by coordinates
