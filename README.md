@@ -1,3 +1,9 @@
+# Update branch
+
+This branchs is used to do my step by step update for the next version of betterflat.
+
+# Warning: this code is in develpment and probably contains errors!
+
 # Better Flattening for X-Plane Airports
 
 betterflat (short **bflat**) flattens the area for a X-Plane airport better – meaning much more close to the airport boundary 
