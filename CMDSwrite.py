@@ -2,7 +2,7 @@ from xplnedsf import *
 import copy
 
 dsf = XPLNEDSF()
-dsf.read("CMDS_Test_in.dsf") ##+50-126.dsf
+dsf.read("CMDS_Test_in.dsf") ##+50-126.dsf   CMDS_Test_in.dsf
 
 with open("CMDS_org.txt", "w+") as fc:
     for d in dsf.DefObjects:
@@ -23,7 +23,7 @@ with open("CMDS_new.txt", "w+") as fcn:
     defIndex = None
     subroadtype = None
     junctionoffset = None
-    enccmds = struct.pack('<BB', 3, 0) ###### TO BE CHANGED: JUST DEFINE EMPTY STRING HERE #####
+    enccmds = b'' 
     for d in dsf.DefObjects:
         fcn.write("3, %s\n" % str(d)) ##### TO BE CHANGED WHEN index > 255 or > 16 Bit Value   --> CMD ID 4 or 5!!!
         enccmds += struct.pack('<BB', 3, d)
@@ -60,14 +60,13 @@ with open("CMDS_new.txt", "w+") as fcn:
             else:
                 print("ERROR!!! Unknown COMMAND ID, ", c[1], "!!!!! CMDS ID 12 an 14  not yet implemented!!!!!!!!!!!")
     
+    
+    enccmds += struct.pack('<BL', 2, 0) #In X-Plane original dsf files command 2 comes first
+    fcn.write("2, 0\n")
+    junctionoffset = 0
     fcn.write("3, 0\n") ### Currently there is only one Road-Defintion --> DefIndex set to 0
     enccmds += struct.pack('<BB', 3, 0)
     for d in dsf.Networks:
-        if d[0][0] != subroadtype:
-            fcn.write("6, %s\n" % str(d[0][0]))
-            enccmds += struct.pack('<BB', 6, d[0][0])
-            print(6,d[0][0])
-            subroadtype = d[0][0]
         if d[0][1] != junctionoffset:
             fcn.write("2, %s\n" % str(d[0][1]))
             enccmds += struct.pack('<BL', 2, d[0][1])
@@ -78,6 +77,11 @@ with open("CMDS_new.txt", "w+") as fcn:
             enccmds += struct.pack('<BH', 1, d[0][2])
             print(1,d[0][2])
             poolIndex = d[0][2]
+        if d[0][0] != subroadtype:   ## Order in org X-Plane files is with 6 at last
+            fcn.write("6, %s\n" % str(d[0][0]))
+            enccmds += struct.pack('<BB', 6, d[0][0])
+            print(6,d[0][0])
+            subroadtype = d[0][0]
         for c in d[1:]:           
             fcn.write(", ".join(str(n) for n in c))
             fcn.write("\n")
@@ -98,15 +102,17 @@ with open("CMDS_new.txt", "w+") as fcn:
     for d in dsf.Patches:
         fcn.write("3, %s\n" % str(d.defIndex))  ##### Only required when defIndex changes  ##### TO BE CHANGED WHEN index > 255 or > 16 Bit Value   --> CMD ID 4 or 5!!!
         #enccmds += struct.pack('<BB', 3, d.defIndex)
-        patchcmds.extend(struct.pack('<BB', 3, d.defIndex)) #### IMPORTANT: Change of DefIndex needs to be directly before new patch, otherwise error       
+        patchcmds.extend(struct.pack('<BB', 3, d.defIndex)) #### IMPORTANT: Change of DefIndex needs to be directly before new patch, otherwise error
+        fcn.write("1, %s\n" % str(d.cmds[0][1])) 
+        patchcmds.extend(struct.pack('<BH', 1, d.cmds[0][1])) ## In X-Plane original files setting pool comes befor the patch definition
         fcn.write("18, %s, %s, %s\n" % (str(d.flag), str(d.near), str(d.far))) #### IF flags stay the same use CMD ID 16 or 17
         #enccmds += struct.pack('<BBff', 18, d.flag, d.near, d.far)
         patchcmds.extend(struct.pack('<BBff', 18, d.flag, d.near, d.far))
         ###### Currently poolIndex is always written at beginning of each patch as first CMD in d.cmds --> only requied if it changes
-        for c in d.cmds:
+        for c in d.cmds[1:]:   ##skip first command as this is pool defintion written above
             fcn.write(", ".join(str(n) for n in c))
             fcn.write("\n")
-            ecmd = b'' ##struct.pack('<BB', 3, 0) ###### TO BE CHANGED ###########################################
+            ecmd = b'' 
             id = c[0] #id of CMD stored as first value in list
             ecmd += struct.pack('<B', id) #encode CMD id
             #fcn.write("%s " % str(id))
