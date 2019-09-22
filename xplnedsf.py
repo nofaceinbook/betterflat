@@ -1,6 +1,6 @@
 #******************************************************************************
 #
-# xplnedsf.py        Version 0.23
+# xplnedsf.py        Version 0.24
 # ---------------------------------------------------------
 # Python module for reading and writing X_Plane DSF files.
 #
@@ -361,7 +361,8 @@ class XPLNEDSF:
                             i += 1
                 if encType == 1 or encType == 3: #values are also stored differenced
                     for i in range (1, nArrays):  
-                        V[-1][i][n] = (V[-1][i][n] + V[-1][i-1][n]) % 65536  #undo differntiation and modulo for wrapping two byte unsigned integer 
+                        V[-1][i][n] = (V[-1][i][n] + V[-1][i-1][n]) % 65536  #undo differntiation and modulo for wrapping two byte unsigned integer
+                                                         ##### NEW TBD #### FOR 32 Bit Pools adapt Moduls ??!! #################### NEW TBD ######################## NEW TBD ########
             self._updateProgress_(len(s))
 
 
@@ -426,6 +427,22 @@ class XPLNEDSF:
             for i in range(int(len(s) / 8) ):  #for each scaling tuple - 4 bytes multiplier and 4 bytes offset
                 m, o = struct.unpack('<ff', s[ i*8 : i*8 + 8] )  #retrieve multiplier and offset
                 Scalings[-1].append([m, o])
+
+    def _packAllScalings_(self): #packs the all Scalings incl. Scal32 values to binary atom strings to be later written to file ############ NEW ################ NEW function ####
+        self._log_.info("Start to pack and all saclings for pools.")
+        self._Atoms_['LACS'] = []
+        self._Atoms_['23CS'] = []
+        for s in self.Scalings:
+            encscal = b''
+            for i in s:
+                encscal += struct.pack('<ff', i[0], i[1])
+            self._Atoms_['LACS'].append(encscal)
+        for s in self.Scal32:
+            encscal = b''
+            for i in s:
+                encscal += struct.pack('<ff', i[0], i[1])
+            self._Atoms_['23CS'].append(encscal)                    
+    ####### End of new function _packScalings_ ############
 
                 
     def _scaleV_(self, bit = 16, reverse = False): #applies scaling to the vertices stored in V and V32
@@ -628,6 +645,101 @@ class XPLNEDSF:
         self._log_.info("{} different Objects with placements coordinates extracted from commands.".format(len(self.Objects)))
         self._log_.info("{} different Network subtypes extracted from commands (could include double count).".format(len(self.Networks)))
 
+    def _packCMDS_(self): #packs all CMDS of Object, Polygons, Networks and Patches in binary string to be later written to file #####NEW FUCTION### NEW ####
+        def encCMD(c): #encodes single CMD in array c and returns its binary
+            ecmd = b'' 
+            id = c[0] #id of CMD stored as first value in list
+            if id == 3 and c[1] > 255: #avoid errors if definition is too big for command id 3
+                id = 4
+            if id == 4 and c[1] > 65535: #avoid errors if definition is too big for command id 4
+                id = 5
+            ecmd += struct.pack('<B', id) #encode CMD id
+            i = 1 #index in value list to be packed
+            if id in self._CMDStructure_: 
+                for valtype in self._CMDStructure_[id][0]: #pack fixed length values of CMD
+                    ecmd += struct.pack('<' + valtype, c[i])
+                    i += 1
+                if len(self._CMDStructLen_[id]) == 3: #pack command with variable length 
+                    vlength = int( (len(c) - i) / len(self._CMDStructure_[id][2]) ) #fixed values inclding CMD id are counting not for the variable length, so minus i #### TBD: Test that this value does not exceed 255!!!!!! ####
+                    if vlength > 255: #make sure that length is not longer than could be encoded in one byte
+                        self._log_.error("Length of CMD with id {} does exceed 255 and will not be included!!!".format(id))
+                        return(b'')
+                    if id == 15:
+                        vlength -= 1 #id = 15 seems a special case that there is one index more than windings 
+                    ecmd += struct.pack('<B', vlength) #count packed
+                    while i < len(c): #now pack the variable length value list
+                        for valtype in self._CMDStructure_[id][2]: #pack fixed length individual value
+                            ecmd += struct.pack('<' + valtype, c[i])
+                            i += 1
+            else:
+                ######### TBD: include special code for CMD 14 here!!! ########## TBD ########### TBD ########### TBD ########### TBD ############### TBD ###########
+                self._log_.error("CMD id {} is not supported (CMD 14 not implemented yet)! Will be skipped!!".format(id))
+                return(b'')
+            return(ecmd)
+        ### end of inner function to pack single CMDS ###   
+        self._log_.info("Start to pack CMDS")
+        #SET state variables
+        flag_physical = None
+        nearLOD = None  
+        farLOD = None
+        poolIndex = None
+        defIndex = None
+        subroadtype = None
+        junctionoffset = None  #### set to 0 if directly set below as in X-Plane standard dsf files
+        enccmds = bytearray() #these will be the encoded CMDS to be returned  ################ TBD CHECK if this local instanced variable really will be copied and stay in object ?????? ##################
+        for d in self.DefObjects: #for each object definition write according CMDS
+            enccmds.extend(encCMD([3, d])) #definition set according to current definition id; function will handle if id > 255
+            for c in self.Objects[d]:
+                if c[0] != poolIndex: #Pool-Index is written before CMD; adapt index if it changes
+                    enccmds.extend(encCMD([1, c[0]]))
+                    poolIndex = c[0]
+                enccmds.extend(encCMD(c[1:])) #now according command to place objects is encoded  #### TO BE TESTED if it works as part of array???????
+        for d in self.DefPolygons: #for each polygon definition write according CMDS
+            enccmds.extend(encCMD([3, d])) #definition set according to current definition id; function will handle if id > 255
+            for c in self.Polygons[d]:
+                if c[0] != poolIndex: #Pool-Index is written before CMD; adapt index if it changes
+                    enccmds.extend(encCMD( [1, c[0]] ))
+                    poolIndex = c[0]
+                enccmds.extend(encCMD(c[1:])) #now according command to place objects is encoded  #### TO BE TESTED if it works as part of array???????        
+        for d in self.Networks:
+            if d[0][1] != junctionoffset: ## Order in org X-Plane files is with CMD id 2 at first
+                enccmds.extend(encCMD([2, d[0][1]]))
+                junctionoffset = d[0][1]
+            if defIndex != 0:
+                enccmds.extend(encCMD([3, 0])) #Currently there is only one Road-Defintion --> DefIndex set to 0
+                defIndex = 0
+            if d[0][2] != poolIndex:
+                enccmds.extend(encCMD([1, d[0][2]]))
+                poolIndex = d[0][2]
+            if d[0][0] != subroadtype:  ## Order in org X-Plane files is with 6 at last
+                enccmds.extend(encCMD([6, d[0][0]]))
+                subroadtype = d[0][0]
+            for c in d[1:]:
+                enccmds.extend(encCMD(c))
+        for d in self.Patches:
+            if defIndex != d.defIndex:
+                enccmds.extend(encCMD([3, d.defIndex])) #definition set according to current definition id; function will handle if id > 255
+                defIndex = d.defIndex
+            if poolIndex != d.cmds[0][1]: #Pool-Index is defined by first command and required to be defined directly before new Patch is defined!
+                enccmds.extend(encCMD([1, d.cmds[0][1]]))
+                poolIndex = d.cmds[0][1]
+            if nearLOD == d.near and farLOD == d.far:
+                if flag_physical == d.flag:
+                    enccmds.extend(encCMD([16]))
+                else:
+                    enccmds.extend(encCMD([17, d.flag]))
+                    flag_physical = d.flag
+            else:
+                enccmds.extend(encCMD([18, d.flag, d.near, d.far]))
+                farLOD = d.far
+                nearLOD = d.near
+                flag_physical = d.flag
+            for c in d.cmds[1:]:   ##skip first command as this is pool defintion written above
+                enccmds.extend(encCMD(c))
+        self._Atoms_['SDMC'] = enccmds #Commands Atom now set to the now packed CMDS
+        self._log_.info("Ended to pack CMDS")
+ ########### END of NEW function _packCMDS_() #################               
+                
 
     def _unpackAtoms_(self): #starts all functions to unpack and extract data froms strings in Atoms
         self._log_.info("Extracting properties and definitions.")
@@ -813,7 +925,7 @@ class XPLNEDSF:
         return l
            
                     
-    def read(self, file):   ###### NEXT STEP: Also read 7-ZIP FILES ###########
+    def read(self, file):  
         self.__init__("_keep_logger_","_keep_statusfunction_") #make sure all values are initialized again in case additional read
         if not os.path.isfile(file):
             self._log_.error("File does not exist!".format(file))
@@ -906,4 +1018,3 @@ class XPLNEDSF:
             f.write(m.digest())
         self._log_.info("Finshed writing dsf-file.")
         return 0
-
