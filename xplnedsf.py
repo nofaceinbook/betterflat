@@ -79,15 +79,24 @@ class XPLNEpatch:
             elif c[0] == 25: # PATCH TRIANGLE RANGE 
                 for v in range(c[1], c[2] - 1, 3): #last index has one added 
                     l.append( [ [p, v], [p, v + 1], [p, v + 2] ] )
-            elif c[0] == 26: # PATCH TRIANGLE STRIP           
+            elif c[0] == 26: # PATCH TRIANGLE STRIP
                 for v in range (3, len(c)): #skip first three values - including command id are not needed any more
-                    l.append( [ [p, c[v-2]], [p, c[v-1]], [p, c[v]] ] )
-            elif c[0] == 27: # PATCH TRIANGLE STRIP CROSS POOL
+                    if v % 2: ##### NEW: Strip 1,2,3,4,5 refers to triangles 1,2,3 2,4,3 3,4,5 ############# NEW ########### ERROR CORRECTION ########## NEW ####
+                        l.append( [ [p, c[v-2]], [p, c[v-1]], [p, c[v]] ] )  ## NEW ##
+                    else:                                                    ## NEW ##
+                        l.append( [ [p, c[v-2]], [p, c[v]], [p, c[v-1]] ] )  ## NEW ##
+            elif c[0] == 27: # PATCH TRIANGLE STRIP CROSS POOL             
                 for v in range (6, len(c), 2): #skip first values - including command id are not needed any more
-                    l.append( [ [c[v-5], c[v-4]], [c[v-3], c[v-2]], [c[v-1], c[v]] ] )                                
+                    if v % 4: ##### NEW: Strip 1,2,3,4,5 refers to triangles 1,2,3 2,4,3 3,4,5 ############# NEW ########### ERROR CORRECTION ########## NEW ####
+                        l.append( [ [c[v-5], c[v-4]], [c[v-3], c[v-2]], [c[v-1], c[v]] ] )  ## NEW ##
+                    else:                                                                   ## NEW ##
+                        l.append( [ [c[v-5], c[v-4]], [c[v-1], c[v]], [c[v-3], c[v-2]] ] )  ## NEW ##
             elif c[0] == 28:  # PATCH TRIANGLE STRIP RANGE
                 for v in range(c[1], c[2] - 2): # last index has one added so -2 as we go 2 up and last in range is not counted
-                    l.append( [ [p, v], [p, v + 1], [p, v + 2] ] )
+                    if (v - c[1]) % 2:  ##### NEW: Strip 1,2,3,4,5 refers to triangles 1,2,3 2,4,3 3,4,5 ############# NEW ########### ERROR CORRECTION ########## NEW ####
+                        l.append( [ [p, v], [p, v + 2], [p, v + 1] ] ) ## NEW ##
+                    else:                                              ## NEW ##
+                        l.append( [ [p, v], [p, v + 1], [p, v + 2] ] ) ## NEW ##
             elif c[0] == 29: # PATCH TRIANGLE FAN                          ##(all FAN commands not yet tested!!!!!!!!)##
                 for v in range (3, len(c)): #skip first three values - including command id are not needed any more
                     l.append( [ [p, c[1]], [p, c[v-1]], [p, c[v]] ] ) #at c[1] is the center point id of the fan
@@ -99,94 +108,21 @@ class XPLNEpatch:
                     l.append( [ [p, c[1]], [p, v + 1], [p, v + 2] ] )                    
         return l
               
-    def trias2cmds(self):  ##MISSING is support of FAN !!! ##############
-        self.cmds = []
-        samePool = None
-        i = 0
-        c = []
-        
-        
-        while i < len(self.trias):
-            c.append([ self.trias[i][0][0], self.trias[i][0][1], self.trias[i][1][0], self.trias[i][1][1], self.trias[i][2][0], self.trias[i][2][1] ]) #set first tria in command
-            if i < len(self.trias) - 1 and self.trias[i][1] == self.trias[i+1][0] and self.trias[i][2] == self.trias[i+1][1]: #STRIP (strip can not start with last tria)
-                c[-1].insert(0, 27) #insert command id for strip
-                i += 1
-                while i < len(self.trias) and self.trias[i][0] == self.trias[i-1][1] and self.trias[i][1] == self.trias[i-1][2]: #continue as long as strip
-                    c[-1].extend(self.trias[i][2])
-                    i += 1
-            else: #NORMAL TRIANGLES
-                c[-1].insert(0, 24) #insert command id for normal tringle command
-                i += 1
-                while i < len(self.trias) and self.trias[i][0] != self.trias[i-1][1] and self.trias[i][1] != self.trias[i-1][2]: #continue as long as triangle
-                    c[-1].extend([ self.trias[i][0][0], self.trias[i][0][1], self.trias[i][1][0], self.trias[i][1][1], self.trias[i][2][0], self.trias[i][2][1] ])
-                    i += 1            
-
-        for e in c:            
-            spid = [1, 1] #have all values doubled that spid list has same length as command list that has for the moment allways pool id and vertex id
-            for i in range(len(e) - 4, -1, -2):
-                if e[i] == e[i+2]:
-                    spid.extend([spid[-1] + 1, spid[-1] + 1])
-                else:
-                    spid.extend([1, 1])
-            spid.append(0) #this value is for the command id
-            spid.reverse()
-            #print(e)
-            #print(spid)
-            #print("----")
-            if e[0] == 24: #Check for same pool chunks in simple TRIAs
-                i = 1
-                while i < len(e): 
-                    if spid[i] >= 6: #SAME Pool for at least following 6 vertices
-                        if samePool != e[i]:
-                            samePool = e[i]
-                            self.cmds.append([1,e[i]]) #set COMMAND definition of the common pool 
-                        self.cmds.append([e[0] - 1]) #SET TRIA SAME POOL OR STRIP SAME POOL (this is commmand id - 1)
-                        while i <= len(e)-6 and spid[i] >= 3:
-                            self.cmds[-1].extend([e[i+1], e[i+3], e[i+5]])
-                            i += 6 #next full tria
-                    else:
-                        self.cmds.append([e[0]]) #we stay with different pool command
-                        while i <= len(e)-6 and spid[i] < 6:
-                            self.cmds[-1].extend([e[i], e[i+1], e[i+2], e[i+3], e[i+4], e[i+5]])
-                            i += 6 #next full tria
-            else: #Check for same pool chunks in STRIP // tbd: FOR THE MOMENT JUST IF COMPLETE COMMAND IS SAME POOL !!!1 ###########
-                if spid[1] == int( (len(e) - 1) / 2):
-                    if samePool != e[i]:
-                        samePool = e[i]
-                        self.cmds.append([1,e[i]]) #set COMMAND definition of the common pool 
-                    self.cmds.append([e[0] - 1]) #SET TRIA SAME POOL OR STRIP SAME POOL (this is commmand id - 1)
-                    for i in range(2, len(e), 2):
-                        self.cmds[-1].append(e[i])
-                else:
-                    self.cmds.append(e)
-
- #       for sc in c:       ##### TBD: Break command if same pool for longer period ####    ##### TBD: MAXIMUM LISTS OF 255 Trias !!!! #############
- #           vids = [sc[2]]
- #           for i in range(3, len(sc), 2):
- #               if sc[i] == sc[i-2]:
- #                   vids.append(sc[i+1])
- #               else:
- #                   break
- #           if len(sc) == 2 * len(vids) + 1:
- #               if samePool != sc[1]:
- #                   samePool = sc[1]
- #                   self.cmds.append([1,sc[1]]) #set COMMAND definition of the common pool 
- #               self.cmds.append([sc[0] - 1]) #SET TRIA SAME POOL OR STRIP SAME POOL (this is commmand id - 1)
- #               self.cmds[-1].extend(vids)
- #           else: #leave command as it was, no same pool
- #               self.cmds.append(sc)
-                
-        for i in range(len(self.cmds)): #Check for Ranges
-            if self.cmds[i][0] == 23 or self.cmds[i][0] == 26: #TRIA or STRIP SAME POOL
-                for j in range(2, len(self.cmds[i])):
-                    if self.cmds[i][j] != self.cmds[i][j-1] + 1:
-                        j = -1 #make sure that not get range when break happens at last vertex
-                        break
-                if j == len(self.cmds[i]) - 1: #RANGE
-                    self.cmds[i] = ([self.cmds[i][0] + 2 , self.cmds[i][1], self.cmds[i][1] + j ]) #change command id to range by adding 2                
-                
-        for i in range(len(self.cmds)): ######## TBD: Break up Commands with more then 255 tria definitions (not for ranges)
-            if len(self.cmds[i]) > 255*3: print ("WARNING: Length of command", i, "is", self.cmds[i], "and might be too long!!!!!")
+    def trias2cmds(self):  ## For the moment only uses single tirangle CMDS for different pools ## To be updeated ############## NEW ######## NEW ############
+        self.cmds = [self.cmds[0]]
+        i = 0 #counts number of trias
+        c = [] #builds single commands
+        for t in self.trias:
+            if (i % 85) == 0: #start new triangle command at beginning and when max length is reached (3 value pairs per triangle, so 255 / 3 = 85)
+                if len(c) > 1: #are there already values for commands
+                    self.cmds.append(c) #append them the the commands
+                c = [24]
+            c.extend(t[0])
+            c.extend(t[1])
+            c.extend(t[2])
+            i += 1
+        if len(c) > 1:
+            self.cmds.append(c) #add the final command
 
 
 class XPLNEraster: #Stores data of Raster Atoms (each dsf could have serverl raster layers)
@@ -580,7 +516,7 @@ class XPLNEDSF:
         self._log_.info("Start to extract CMDS")
         for i in range(len(self.DefPolygons)):
             self.Polygons.append([]) #span list of empty lists for all defined poygon types
-        for i in range(len(self.DefObjects)): ########## OBJECTS NOT TESTED YET !!!!!!!!!!!!!!!!!!!!!!!!!!######
+        for i in range(len(self.DefObjects)): 
             self.Objects.append([]) #span list of empty lists for all defined poygon types
 
         patchPoolIndex = None #poolIndex currently used in current patch; if different from current in CMDS then change command is written to cmds of patch
@@ -593,6 +529,9 @@ class XPLNEDSF:
         subroadtype = 0
         junctionoffset = 0
         counter = 0
+        amount_of_two_percent_CMDS = int(len(self.CMDS)/50)  ### NEW ###
+        if amount_of_two_percent_CMDS == 0:                  ### NEW ###
+            amount_of_two_percent_CMDS = 1 #have 1 as minimal value in order to avoid devision by zero below   ### NEW ###
         for c in self.CMDS:
             if c[0] == 1: # new pool selection
                 poolIndex = c[1]
@@ -615,9 +554,6 @@ class XPLNEDSF:
                 self.Polygons[defIndex].append([poolIndex]) #new Polygond added for defIndex type and it starts with poolIndex from which its vertices are
                 self.Polygons[defIndex][-1].extend(c) #followed by the complete command to build it
             elif 16 <= c[0] <= 18:  # Add new Terrain Patch
-                if self.Patches != []: #write trias of privous ptach  ########## NEW #######
-                    self.Patches[-1].trias = self.Patches[-1].triangles()  #### NEW ###
-                    self._setPatchBoundary_(self.Patches[-1]) #sets min/max values of patch #### NEW ###
                 patchPoolIndex = None #poolIndex for new patch needs to be set as first command
                 if c[0] == 17: # New Patch with new physical flag
                     flag_physical = c[1]
@@ -636,10 +572,11 @@ class XPLNEDSF:
                     return(1)
                 self.Patches[-1].cmds.append(c) 
             counter += 1
-            ##TO BE UPDATED!!##if not counter % (int(len(self.CMDS)/50)): #after every 2% processed of commands update progress  --> RAISES ERROR when less than 50 CMDS
-                #####TO BE UPDATED##self._updateProgress_(round(len(self._Atoms_['SDMC']) / 100)) #count only half of the length, other half by unpackCMDS
-        ####TO BE UPDATED#### self.Patches[-1].trias = self.Patches[-1].triangles() #write trias of last patch read ##### NEW ########  ---> Raises error when dsf includes no Patch
-        ####TO BE UPDATED### self._setPatchBoundary_(self.Patches[-1]) #sets min/max values of patch #### NEW ### ---> Raises error when dsf includes no Patch
+            if not counter % amount_of_two_percent_CMDS: #after every 2% processed of commands update progress  --> RAISES ERROR when less than 50 CMDS
+                self._updateProgress_(round(len(self._Atoms_['SDMC']) / 100)) #count only half of the length, other half by unpackCMDS
+        for p in self.Patches: #add to each patch its trias as list and the rectangle boundary coordinates of patch   ########### NEW ############# NEW #####
+            p.trias = p.triangles()   ##NEW##
+            self._setPatchBoundary_(p) ##NEW##
         self._log_.info("{} patches extracted from commands.".format(len(self.Patches)))
         self._log_.info("{} different Polygon types including there definitions extracted from commands.".format(len(self.Polygons)))
         self._log_.info("{} different Objects with placements coordinates extracted from commands.".format(len(self.Objects)))
@@ -662,7 +599,7 @@ class XPLNEDSF:
                 if len(self._CMDStructLen_[id]) == 3: #pack command with variable length 
                     vlength = int( (len(c) - i) / len(self._CMDStructure_[id][2]) ) #fixed values inclding CMD id are counting not for the variable length, so minus i #### TBD: Test that this value does not exceed 255!!!!!! ####
                     if vlength > 255: #make sure that length is not longer than could be encoded in one byte
-                        self._log_.error("Length of CMD with id {} does exceed 255 and will not be included!!!".format(id))
+                        self._log_.error("Length of CMD with id {} and length {} does exceed 255 and will not be included!!!".format(id, vlength))
                         return(b'')
                     if id == 15:
                         vlength -= 1 #id = 15 seems a special case that there is one index more than windings 
@@ -746,7 +683,7 @@ class XPLNEDSF:
         if 'PORP' in self._Atoms_:
             self._extractProps_()
         else:
-            self._log_.error("This dsf file has not properties defined!")
+            self._log_.error("This dsf file has no properties defined!")
         if 'NFED' in self._Atoms_:    
             self._extractDefs_()
         else:
@@ -779,9 +716,11 @@ class XPLNEDSF:
 
     def _packAtoms_(self): #starts all functions to write all variables to strings (for later been written to file)
         self._log_.info("Preparing data to be written to file.")
-        self._log_.info("This version only applies changes to POOL atoms (all other atoms are written as read)!")
+        self._log_.info("This version only applies changes to POOL, CMDS and SCAL atoms (all other atoms inc. SC32 are written as read)!")
         self._scaleV_(16, True) #de-scale again 
         self._encodePools_()
+        self._packAllScalings_()
+        self._packCMDS_()
         return 0
     
     def _setPatchBoundary_(self, p): #sets min/max values of patch p          ################ NEW #############
@@ -830,7 +769,23 @@ class XPLNEDSF:
         for p in l: #now go only through potential patches to check details
             for t in p.trias:
                 if isPointInTria(v, self.TriaVertices(t)):
-                    self._log_.info("Vertex {} lies in tria {}.".format(v, self.TriaVertices(t)))
+                    self._log_.info("Vertex {} lies in tria {} of patch number {}.".format(v, self.TriaVertices(t), self.Patches.index(p)))
+                    self._log_.info("    This tria is defined by vertices in pool/index {}.".format(t))
+                    self._log_.info("    First vertex of tria is {}.".format(self.V[t[0][0]][t[0][1]]))
+                    v_Pool = t[0][0]
+                    ################## CAUTION: code below is for specific vertex / pool with just 5 elements1!!! ####### CAUTION ####
+                    self.V[v_Pool].append([v[0],v[1],-32768.0,0,0]) #append vertex to pool of 1. vertex ## actually normal vectors are -1.5259021896696368e-05 instead of 0
+                    v_Index = len(self.V[v_Pool]) - 1 #new vertex is at the end, so index is length of Pool
+                    p.trias.append([ [v_Pool, v_Index], [t[0][0], t[0][1]], [t[1][0], t[1][1]] ])
+                    self._log_.info("    Added triangle  {}.".format(p.trias[-1]))
+                    p.trias.append([ [v_Pool, v_Index], [t[1][0], t[1][1]], [t[2][0], t[2][1]] ])
+                    self._log_.info("    Added triangle  {}.".format(p.trias[-1]))
+                    p.trias.append([ [v_Pool, v_Index], [t[2][0], t[2][1]], [t[0][0], t[0][1]] ])
+                    self._log_.info("    Added triangle  {}.".format(p.trias[-1]))
+                    p.trias.remove(t)
+                    break #in same patch there will be no further triangle where v is in
+            p.trias2cmds() ##Update Commands accordingly
+                    
                     ### Next step adpat tria if v is not too close to border (then change order) or to close to tria-vertex (then skip)
         return 0
         ## returns nothin, except errors??
@@ -1018,3 +973,4 @@ class XPLNEDSF:
             f.write(m.digest())
         self._log_.info("Finshed writing dsf-file.")
         return 0
+
