@@ -1,6 +1,6 @@
 #******************************************************************************
 #
-# xplnedsf.py        Version 0.24
+# xplnedsf.py        Version 0.25
 # ---------------------------------------------------------
 # Python module for reading and writing X_Plane DSF files.
 #
@@ -39,7 +39,7 @@ else:
     PY7ZLIBINSTALLED = True
 
 
-def isPointInTria(p, t):
+def isPointInTria(p, t):  #### NEW ####
     denom = ((t[1][1] - t[2][1])*(t[0][0] - t[2][0]) + (t[2][0] - t[1][0])*(t[0][1] - t[2][1]))
     if denom == 0: ### to be checked when this is the case!!!!
         return 0
@@ -50,6 +50,32 @@ def isPointInTria(p, t):
     c = 1 - a - b
     return (0 <= a <= 1 and 0 <= b <= 1 and 0 <= c <= 1)
 
+def PointLocationInTria(p, t):  ### TBD: Merge with isPointINTria, identical except return value !!!! ######### NEW #### NEW ####
+    denom = ((t[1][1] - t[2][1])*(t[0][0] - t[2][0]) + (t[2][0] - t[1][0])*(t[0][1] - t[2][1]))
+    if denom == 0: ### to be checked when this is the case!!!!
+        return 0
+    nom_a = ((t[1][1] - t[2][1])*(p[0] - t[2][0]) + (t[2][0] - t[1][0])*(p[1] - t[2][1]))
+    nom_b = ((t[2][1] - t[0][1])*(p[0] - t[2][0]) + (t[0][0] - t[2][0])*(p[1] - t[2][1]))
+    a = nom_a / denom
+    b = nom_b / denom
+    return (a, b) #returns multiplier for vector (t2 - t0) and for vector (t2 - t1) starting from point t2
+
+
+
+def _linsolve_(a1, b1, c1, a2, b2, c2):  ### NEW - taken from bflat ###
+    divisor = (a1 * b2) - (a2 * b1)
+    if divisor == 0:  ####### TBD: HANDLE ERROR for colineear setting !!!!!!!!!!!!!!! #################
+        return (-99999, -99999)  ### points are colinear, might intersect or not ##### here None but with negative values calling intersection function returns None
+    return (round(((c1 * b2) - (c2 * b1)) / divisor, 8),
+            round(((a1 * c2) - (a2 * c1)) / divisor, 8))  # ROUNDING TO ALWAYS GET SAME CONCLUSION
+
+
+def intersection(p1, p2, p3, p4):  # checks if segment from p1 to p2 intersects segement from p3 to p4   ### NEW - taken from bflat ###
+    s0, t0 = _linsolve_(p2[0] - p1[0], p3[0] - p4[0], p3[0] - p1[0], p2[1] - p1[1], p3[1] - p4[1], p3[1] - p1[1])
+    if s0 >= 0 and s0 <= 1 and t0 >= 0 and t0 <= 1:
+        return (round((p1[0] + s0 * (p2[0] - p1[0])), 8), round(p1[1] + s0 * (p2[1] - p1[1]), 8))  ### returns the cutting point as tuple; ROUNDING TO ALWAYS GET SAME POINT ###### NEW ERROR CORRECTION #### NEW
+    else:                                                         ### ERROR CORRECTIO: p2[1] - p1[1] instead of p1[1] - p1[1] above    ### for bflat ############## NEW #############
+        return (None)
 
 
 class XPLNEpatch:
@@ -757,6 +783,44 @@ class XPLNEDSF:
         ### NEXT STEP: CREATE HERE NEW Pool for that array length
         ###### ALSO CREATE SCALINGS FOR NEW POOLS!!!! AND CHECK THAT NEW VERTICES FIT FOR THAT SCALING
         
+    def cutEdges(self, v, w): #cuts all edges of trias that intersect with segment from vertex v to w   ########### NEW ###########
+        l = self.PatchesInArea(*self.BoundingRectangle([v,w]))   ### * converts returned tuple in an argument list
+        self._log_.info("Segement from {} to {} relevant in {} patches.".format(v, w, len(l)))
+        if len(l) == 0:
+            self._log_.error("No intersections with segment from {} to {} found. Edge needs to be inserted!".format(v, w))
+            ### TBD: insert edge from v ot w in mesh !!! ### TBD ######## TBD ###
+            return 1
+        for p in l: #now go only through potential patches to check details
+            new_trias = [] #trias to be added when cutting in patch
+            old_trias = [] #old trias to be removed when cutting in patch
+            for t in p.trias:
+                tv = self.TriaVertices(t)
+                for edge in range(3): # go through edges of tria by index numbers
+                    iv = intersection(v, w, tv[edge], tv[(edge+1)%3]) # modulo 3 returns to first vertex to close tria
+                    if iv:
+                        self._log_.info("Intersection found at {}.".format(iv))
+                        v_Pool = t[edge][0]
+                        ######## CAUTION: Code below handles just the case the one edge of tria is cut: TBD insert case that two edges are intersected !!!!!! #################
+                        ################## CAUTION: code below is for specific vertex / pool with just 5 elements1!!! ####### CAUTION ####
+                        ######################## TBD: Only add vertex if not already added ################# !!!!!!!!!!!!!!!!!!!!!!!!!!
+                        self.V[v_Pool].append([iv[0],iv[1],-32768.0,0,0]) #append vertex to pool of 1. vertex ## actually normal vectors are -1.5259021896696368e-05 instead of 0
+                        v_Index = len(self.V[v_Pool]) - 1 #new vertex is at the end, so index is length of Pool
+                        self._log_.info("    Vertex added to Pool {} with index {} and coordinates {}.".format(v_Pool, v_Index, self.V[v_Pool][v_Index]))
+                        new_trias.append([ [t[edge][0], t[edge][1]], [v_Pool, v_Index],  [t[(edge+2)%3][0], t[(edge+2)%3][1]] ])
+                        new_trias.append([ [v_Pool, v_Index], [t[(edge+1)%3][0], t[(edge+1)%3][1]], [t[(edge+2)%3][0], t[(edge+2)%3][1]] ])
+                        old_trias.append(t)
+            for nt in new_trias:
+                p.trias.append(nt)
+                self._log_.info("    Added triangle  {} to Patch {}.".format(nt, self.Patches.index(p)))
+                self._log_.info("         Having coordinates {}.".format(self.TriaVertices(nt)))
+            for ot in old_trias:
+                p.trias.remove(ot)
+                self._log_.info("    Removed triangle  {}.".format(ot))
+                self._log_.info("         Having coordinates {}.".format(self.TriaVertices(ot)))
+            p.trias2cmds() ##Update Commands accordingly
+               
+
+        
     def insertVertex(self, v): #adds new vertex to dsf and updates mesh accordingly   ########### NEW ###########
         l = []
         for p in self.Patches:
@@ -769,13 +833,20 @@ class XPLNEDSF:
         for p in l: #now go only through potential patches to check details
             for t in p.trias:
                 if isPointInTria(v, self.TriaVertices(t)):
+                    #### TBD: Don't instert v if too close to vertexes of Tria
+                    #### TBD: If too close to or evon on one tria edge, then cut edge instead of inserting vertex
                     self._log_.info("Vertex {} lies in tria {} of patch number {}.".format(v, self.TriaVertices(t), self.Patches.index(p)))
                     self._log_.info("    This tria is defined by vertices in pool/index {}.".format(t))
                     self._log_.info("    First vertex of tria is {}.".format(self.V[t[0][0]][t[0][1]]))
-                    v_Pool = t[0][0]
-                    ################## CAUTION: code below is for specific vertex / pool with just 5 elements1!!! ####### CAUTION ####
-                    self.V[v_Pool].append([v[0],v[1],-32768.0,0,0]) #append vertex to pool of 1. vertex ## actually normal vectors are -1.5259021896696368e-05 instead of 0
+                    v_Pool = t[0][0] #selct pool for new vertex based on first vertex of triangle
+                    v_new = [ v[0], v[1], -32768.0, 0, 0 ] ### TBD: Calculate ecact height if not taken from Raster + handle normal vectors then !!!! ############# TBD !!! ###
+                    for i in range(5, len(self.V[v_Pool][0])): #go through optional coordinates s, t values based on first vertex in according Pool
+                        l0, l1 = PointLocationInTria(v, self.TriaVertices(t)) # returns length for vectors from point t3 with l0*(t2-t0) and l1*(t2-t1)
+                        print("l0, l1 :", l0, l1, "anwenden auf:", self.V[t[0][0]][t[0][1]][i], self.V[t[1][0]][t[1][1]][i], self.V[t[2][0]][t[2][1]][i]) ##### ATTENTION: STILL WRONG !!!! ####
+                        v_new.append(self.V[t[2][0]][t[2][1]][i] + l0 * (self.V[t[2][0]][t[2][1]][i] - self.V[t[0][0]][t[0][1]][i])  + l1 * (self.V[t[2][0]][t[2][1]][i] - self.V[t[1][0]][t[1][1]][i]) )
+                    self.V[v_Pool].append(v_new) #append vertex to pool of 1. vertex ## actually normal vectors are -1.5259021896696368e-05 instead of 0
                     v_Index = len(self.V[v_Pool]) - 1 #new vertex is at the end, so index is length of Pool
+                    self._log_.info("    Vertex added to Pool {} with index {} and coordinates {}.".format(v_Pool, v_Index, self.V[v_Pool][v_Index]))
                     p.trias.append([ [v_Pool, v_Index], [t[0][0], t[0][1]], [t[1][0], t[1][1]] ])
                     self._log_.info("    Added triangle  {}.".format(p.trias[-1]))
                     p.trias.append([ [v_Pool, v_Index], [t[1][0], t[1][1]], [t[2][0], t[2][1]] ])
@@ -853,7 +924,7 @@ class XPLNEDSF:
         return [  [self.V[t[0][0]][t[0][1]][0], self.V[t[0][0]][t[0][1]][1]], [self.V [t[1][0]] [t[1][1]][0], self.V[t[1][0]][t[1][1]][1]],  [self.V[t[2][0]][t[2][1]][0], self.V[t[2][0]][t[2][1]][1]] ]
 
     
-    def PatchesInArea (self, latS, latN, lonW, lonE):  #################### TBD: Adapt to new trias list and min/max stored with patch !!!!! ##########################
+    def PatchesInArea (self, latS, latN, lonW, lonE):  #################### NEW UPDATE: Function uses now trias list of trias instead trias() build funciton  ### NEW #######################
     #
     # returns a list of all patches in dsf, where the rectangle bounding of the patch intersects
     # the rectangle area defined by coordinates
@@ -864,15 +935,15 @@ class XPLNEDSF:
         l = [] # list of patch-ids intersecting area
         count = 0
         for p in self.Patches:
-            v = []
-            for t in p.triangles(): #all triangles in each patch
-                v.extend(self.TriaVertices(t)) #so all vertices of the patch
-            miny, maxy, minx, maxx = self.BoundingRectangle(v)
+            ## v = []    #### NEW: Not needed any more ###### NEW ###
+            ## for t in p.triangles(): #all triangles in each patch
+            ##    v.extend(self.TriaVertices(t)) #so all vertices of the patch
+            ## miny, maxy, minx, maxx = self.BoundingRectangle(v)
             if self._DEBUG_: self._log_.debug("Checking patch {} of {} which lies in SW ({}, {}) and NE ({}, {}).".format(count, len(self.Patches), miny, minx, maxy, maxx))
-            if not (minx < lonW and maxx < lonW): #x-range of box is not completeley West of area
-                if not (minx > lonE and maxx > lonE): #x-range of box is not completele East of area
-                    if not (miny < latS and maxy < latS): #y-range is not completele South of area
-                        if not (miny > latN and maxy > latN): #y-range is not conmpletele North of ares
+            if not (p.minx < lonW and p.maxx < lonW): #x-range of box is not completeley West of area      #### NEW ### use p.minx instead of minx - also below ##### NEW ###
+                if not (p.minx > lonE and p.maxx > lonE): #x-range of box is not completele East of area
+                    if not (p.miny < latS and p.maxy < latS): #y-range is not completele South of area
+                        if not (p.miny > latN and p.maxy > latN): #y-range is not conmpletele North of ares
                             l.append(p)  #so we have an intersection of box with area and append the patch index
                             if self._DEBUG_: self._log_.debug("Patch {} in SW ({}, {}) and NE ({}, {}) does intersect.".format(count, miny, minx, maxy, maxx))
             count += 1
