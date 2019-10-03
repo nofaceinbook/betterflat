@@ -764,7 +764,7 @@ class XPLNEDSF:
         return 0
                                           
     
-    def _addVertexToPool_(self, v): #adds Vertex v to Pools V   v=[1,2,3] or v=[[1], [2], [3])???        ################# NEW ############
+    def _addVertexToPool_(self, v): #adds Vertex v to Pools V   v=[1,2,3] or v=[[1], [2], [3])???        ################# NEW ############ unclear if needed ??? ####
         ## returns tuple (Pool_ID, index)
         ### assumes that no different Pools for different height are needed (should all be with 1.000 m height difference)
         ### assumes that maximum limit of 64.000 vertices per pool is not reached
@@ -788,27 +788,55 @@ class XPLNEDSF:
         self._log_.info("Segement from {} to {} relevant in {} patches.".format(v, w, len(l)))
         if len(l) == 0:
             self._log_.error("No intersections with segment from {} to {} found. Edge needs to be inserted!".format(v, w))
-            ### TBD: insert edge from v ot w in mesh !!! ### TBD ######## TBD ###
+            ### TBD?: insert edge from v ot w in mesh?? OR this happens by inserting v and w als vertices ?? !!! ### TBD ######## TBD ###
             return 1
         for p in l: #now go only through potential patches to check details
             new_trias = [] #trias to be added when cutting in patch
             old_trias = [] #old trias to be removed when cutting in patch
             for t in p.trias:
                 tv = self.TriaVertices(t)
+                iv = [] #list of intersection vertices between line vw and edges of triangle t, could be between 0 and 3
                 for edge in range(3): # go through edges of tria by index numbers
-                    iv = intersection(v, w, tv[edge], tv[(edge+1)%3]) # modulo 3 returns to first vertex to close tria
-                    if iv:
-                        self._log_.info("Intersection found at {}.".format(iv))
-                        v_Pool = t[edge][0]
-                        ######## CAUTION: Code below handles just the case the one edge of tria is cut: TBD insert case that two edges are intersected !!!!!! #################
-                        ################## CAUTION: code below is for specific vertex / pool with just 5 elements1!!! ####### CAUTION ####
-                        ######################## TBD: Only add vertex if not already added ################# !!!!!!!!!!!!!!!!!!!!!!!!!!
-                        self.V[v_Pool].append([iv[0],iv[1],-32768.0,0,0]) #append vertex to pool of 1. vertex ## actually normal vectors are -1.5259021896696368e-05 instead of 0
-                        v_Index = len(self.V[v_Pool]) - 1 #new vertex is at the end, so index is length of Pool
-                        self._log_.info("    Vertex added to Pool {} with index {} and coordinates {}.".format(v_Pool, v_Index, self.V[v_Pool][v_Index]))
-                        new_trias.append([ [t[edge][0], t[edge][1]], [v_Pool, v_Index],  [t[(edge+2)%3][0], t[(edge+2)%3][1]] ])
-                        new_trias.append([ [v_Pool, v_Index], [t[(edge+1)%3][0], t[(edge+1)%3][1]], [t[(edge+2)%3][0], t[(edge+2)%3][1]] ])
-                        old_trias.append(t)
+                    cuttingPoint = intersection(v, w, tv[edge], tv[(edge+1)%3]) # modulo 3 returns to first vertex to close tria
+                    if cuttingPoint:
+                        cuttingPoint = (cuttingPoint[0], cuttingPoint[1], edge) #store number of edge cut as third element
+                        iv.append(cuttingPoint)
+                        ### tbd: don't append if cuttingPoint is too close to existing vertex of tria --> max. 2 cutting Points !!!!!!!! ################## TBD ###########
+                if len(iv) == 2:
+                    if iv[1][0] > iv[0][0] or (iv[1][0] == iv[0][0] and iv[1][1] > iv[0][1]):
+                        iv[0], iv[1] = iv[1], iv[0] #make sure to always start with most western (or most southern if both have same west coordinate) cutting Point in order to always get same mesh for overlays
+                        print("Swapped Cutting points!!!!!!!!!!!!!")
+                    self._log_.info("Two intersections found at {}.".format(iv))
+                    v_Pool = t[0][0] #select Pool that will be extended by new cutting vertices by first point of tria
+                    ################## CAUTION: code below is for specific vertex / pool with just 5 elements1!!! ####### CAUTION ####
+                    self.V[v_Pool].append([iv[0][0],iv[0][1],-32768.0,0,0]) #append vertex ## actually normal vectors are -1.5259021896696368e-05 instead of 0
+                    self.V[v_Pool].append([iv[1][0],iv[1][1],-32768.0,0,0]) #append vertex ## actually normal vectors are -1.5259021896696368e-05 instead of 0
+                    v_Index = len(self.V[v_Pool]) - 1 #new vertex is at the end, so index of second inserted is length of Pool, for the one added before -1
+                    self._log_.info("    Vertex added to Pool {} with index {} and coordinates {}.".format(v_Pool, v_Index, self.V[v_Pool][v_Index]))
+                    self._log_.info("    Vertex added to Pool {} with index {} and coordinates {}.".format(v_Pool, v_Index-1, self.V[v_Pool][v_Index-1]))
+                    edge = iv[0][2] ## start with edge with west/southern cutting point having index v_Index-1 (was inserted first)
+                    if iv[1][2] == (iv[0][2] + 1) % 3: #second cutting point lies on next edge
+                        print("Second cutting point on next edge.")
+                        new_trias.append([ [v_Pool, v_Index-1], [t[(edge+1)%3][0], t[(edge+1)%3][1]], [v_Pool, v_Index] ])
+                        new_trias.append([ [v_Pool, v_Index-1], [v_Pool, v_Index], [t[(edge+2)%3][0], t[(edge+2)%3][1]] ])
+                        new_trias.append([ [v_Pool, v_Index-1],  [t[(edge+2)%3][0], t[(edge+2)%3][1]], [t[edge][0], t[edge][1]] ])
+                    else: #second cutting point must lie on previous edge
+                        print("Second cutting point on previous edge.")
+                        new_trias.append([ [v_Pool, v_Index-1], [t[(edge+1)%3][0], t[(edge+1)%3][1]],  [t[(edge+2)%3][0], t[(edge+2)%3][1]] ])
+                        new_trias.append([ [v_Pool, v_Index-1], [t[(edge+2)%3][0], t[(edge+2)%3][1]], [v_Pool, v_Index]  ])
+                        new_trias.append([ [v_Pool, v_Index-1], [v_Pool, v_Index], [t[edge][0], t[edge][1]] ])
+                    old_trias.append(t)                   
+                elif len(iv) == 1:
+                    edge = iv[0][2]
+                    self._log_.info("One intersections found at {}.".format(iv))
+                    v_Pool = t[0][0] #select Pool that will be extended by new cutting vertex by first point of tria
+                    ################## CAUTION: code below is for specific vertex / pool with just 5 elements1!!! ####### CAUTION ####
+                    self.V[v_Pool].append([iv[0][0],iv[0][1],-32768.0,0,0]) #append vertex ## actually normal vectors are -1.5259021896696368e-05 instead of 0
+                    v_Index = len(self.V[v_Pool]) - 1 #new vertex is at the end, so index is length of Pool
+                    self._log_.info("    Vertex added to Pool {} with index {} and coordinates {}.".format(v_Pool, v_Index, self.V[v_Pool][v_Index]))
+                    new_trias.append([ [t[edge][0], t[edge][1]], [v_Pool, v_Index],  [t[(edge+2)%3][0], t[(edge+2)%3][1]] ])
+                    new_trias.append([ [v_Pool, v_Index], [t[(edge+1)%3][0], t[(edge+1)%3][1]], [t[(edge+2)%3][0], t[(edge+2)%3][1]] ])
+                    old_trias.append(t)
             for nt in new_trias:
                 p.trias.append(nt)
                 self._log_.info("    Added triangle  {} to Patch {}.".format(nt, self.Patches.index(p)))
@@ -835,15 +863,23 @@ class XPLNEDSF:
                 if isPointInTria(v, self.TriaVertices(t)):
                     #### TBD: Don't instert v if too close to vertexes of Tria
                     #### TBD: If too close to or evon on one tria edge, then cut edge instead of inserting vertex
+                    #### TBD: Make sure Pool Index does not exceed/reach 2^16 --> Could be handled when pools are converted to binary
                     self._log_.info("Vertex {} lies in tria {} of patch number {}.".format(v, self.TriaVertices(t), self.Patches.index(p)))
                     self._log_.info("    This tria is defined by vertices in pool/index {}.".format(t))
                     self._log_.info("    First vertex of tria is {}.".format(self.V[t[0][0]][t[0][1]]))
                     v_Pool = t[0][0] #selct pool for new vertex based on first vertex of triangle
-                    v_new = [ v[0], v[1], -32768.0, 0, 0 ] ### TBD: Calculate ecact height if not taken from Raster + handle normal vectors then !!!! ############# TBD !!! ###
+                    if self.V[t[0][0]][t[0][1]][2] > -32768 and self.V[t[1][0]][t[1][1]][2] > -32768 and self.V[t[2][0]][t[2][1]][2] > -32768:
+                        ##all vertices have height directly assigned, probably no raster excisten, so also height for new vertex has to be calculated
+                        l0, l1 = PointLocationInTria(v, self.TriaVertices(t)) # returns length for vectors from point t3 with l0*(t2-t0) and l1*(t2-t1)
+                        height = self.V[t[2][0]][t[2][1]][2] + l0 * (self.V[t[0][0]][t[0][1]][2] - self.V[t[2][0]][t[2][1]][2])  + l1 * (self.V[t[1][0]][t[1][1]][2] - self.V[t[2][0]][t[2][1]][2])
+                        #### tbd: in that case also VERTEX NORMAL HAS TO BE CALCULATED, BELOW JUST 0,0 is inserted !!! ################# !!!!!!!!!!
+                    else:
+                        height = -32768.0
+                    v_new = [ v[0], v[1], height, 0, 0 ] ####### TBD: Merge the calculation of height with the calculation of optional coords#################
                     for i in range(5, len(self.V[v_Pool][0])): #go through optional coordinates s, t values based on first vertex in according Pool
                         l0, l1 = PointLocationInTria(v, self.TriaVertices(t)) # returns length for vectors from point t3 with l0*(t2-t0) and l1*(t2-t1)
-                        print("l0, l1 :", l0, l1, "anwenden auf:", self.V[t[0][0]][t[0][1]][i], self.V[t[1][0]][t[1][1]][i], self.V[t[2][0]][t[2][1]][i]) ##### ATTENTION: STILL WRONG !!!! ####
-                        v_new.append(self.V[t[2][0]][t[2][1]][i] + l0 * (self.V[t[2][0]][t[2][1]][i] - self.V[t[0][0]][t[0][1]][i])  + l1 * (self.V[t[2][0]][t[2][1]][i] - self.V[t[1][0]][t[1][1]][i]) )
+                        print("l0, l1 :", l0, l1, "anwenden auf:", self.V[t[0][0]][t[0][1]][i], self.V[t[1][0]][t[1][1]][i], self.V[t[2][0]][t[2][1]][i]) 
+                        v_new.append(self.V[t[2][0]][t[2][1]][i] + l0 * (self.V[t[0][0]][t[0][1]][i] - self.V[t[2][0]][t[2][1]][i])  + l1 * (self.V[t[1][0]][t[1][1]][i] - self.V[t[2][0]][t[2][1]][i]) )
                     self.V[v_Pool].append(v_new) #append vertex to pool of 1. vertex ## actually normal vectors are -1.5259021896696368e-05 instead of 0
                     v_Index = len(self.V[v_Pool]) - 1 #new vertex is at the end, so index is length of Pool
                     self._log_.info("    Vertex added to Pool {} with index {} and coordinates {}.".format(v_Pool, v_Index, self.V[v_Pool][v_Index]))
@@ -856,17 +892,8 @@ class XPLNEDSF:
                     p.trias.remove(t)
                     break #in same patch there will be no further triangle where v is in
             p.trias2cmds() ##Update Commands accordingly
-                    
-                    ### Next step adpat tria if v is not too close to border (then change order) or to close to tria-vertex (then skip)
         return 0
-        ## returns nothin, except errors??
-        ## better add list of vertices at same time ???
-        # 1) get patchesInArea for v -->> store area with patches to avoid re-calculation every time
-        # 2) go through all trias in these patches and check if v lies in tria (use point in poly function in blfat); if none found --> error (out of 1 by 1 degree tile?)
-          # 3) calculate S/T coordinates base on S/T of tria // in this version just take normal vector same as of tria (problem only for meshes without raster)
-          # 4) add vertex to Pool (Patch/coords of vertices of tria say how many coordinates are required )
-          # 5) replace tria with 3 new ones in right order in patch.tiras list
-        ###### ==> check if correct with kmlExport that uses patch.tiras list instad of trinangles() funciton
+
             
     def getElevation(self, x, y, z = -32768): #gets Elevation at point (x,y) from raster grid Elevation
         if int(z) != -32768: #in case z vertex is different from -32768 than this is the right height and not taken from raster
