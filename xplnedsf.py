@@ -1,6 +1,6 @@
 #******************************************************************************
 #
-# xplnedsf.py        Version 0.25
+# xplnedsf.py        Version 0.26
 # ---------------------------------------------------------
 # Python module for reading and writing X_Plane DSF files.
 #
@@ -30,6 +30,7 @@ import struct #required for binary pack and unpack
 import hashlib #required for md5 hash in dsf file footer
 import logging #for output to console and/or file
 from io import BytesIO #required to go through bytes of a read 7ZIP-File
+from math import sin, cos, sqrt, atan2, radians ############################## NEW ### for distance calculation # place it in extra library later ########## NEW #########
 
 try:
     import py7zlib
@@ -37,6 +38,19 @@ except ImportError:
     PY7ZLIBINSTALLED = False
 else:
     PY7ZLIBINSTALLED = True
+
+
+def distance(p1, p2): #calculates distance between p1 and p2 in meteres where p is pair of longitude, latitude values          ####### NEW ## from bflat ###########
+    R = 6371009 #mean radius earth in m
+    lon1 = radians(p1[0]) ##### NEW ######## WARNING: changed order as it is in bflat now !!!!!!!! ########### NEW ##################
+    lat1 = radians(p1[1])
+    lon2 = radians(p2[0])
+    lat2 = radians(p2[1]) 
+    dlon = lon2 - lon1
+    dlat = lat2 - lat1
+    a = sin(dlat / 2)**2 + cos(lat1) * cos(lat2) * sin(dlon / 2)**2
+    c = 2 * atan2(sqrt(a), sqrt(1 - a))   
+    return R * c
 
 
 def isPointInTria(p, t):  #### NEW ####
@@ -176,7 +190,6 @@ class XPLNEDSF:
         self._MultiAtoms_ = ['LOOP', 'LACS', '23OP', '23CS', 'IMED', 'DMED'] #These Atoms can occur severl times and therefore are stored as list in self._Atoms_
         self._CMDStructure_ = {1 : ['H'], 2 : ['L'], 3 : ['B'], 4 : ['H'], 5 : ['L'], 6 : ['B'], 7 : ['H'], 8 : ['HH'], 9 : ['', 'B', 'H'], 10 : ['HH'], 11 : ['', 'B', 'L'], 12 : ['H', 'B', 'H'], 13 : ['HHH'], 15 : ['H', 'B', 'H'], 16 : [''], 17 : ['B'], 18 : ['Bff'], 23 : ['', 'B', 'H'], 24 : ['', 'B', 'HH'], 25 : ['HH'], 26 : ['', 'B', 'H'], 27 : ['', 'B', 'HH'], 28 : ['HH'], 29 : ['', 'B', 'H'], 30 : ['', 'B', 'HH'], 31 : ['HH'], 32 : ['', 'B', 'c'], 33 : ['', 'H', 'c'], 34 : ['', 'L', 'c']}
         self._CMDStructLen_ = {1 : [2], 2 : [4], 3 : [1], 4 : [2], 5 : [4], 6 : [1], 7 : [2], 8 : [4], 9 : [0, 1, 2], 10 : [4], 11 : [0, 1, 4], 12 : [2, 1, 2], 13 : [6], 15 : [2, 1, 2], 16 : [0], 17 : [1], 18 : [9], 23 : [0, 1, 2], 24 : [0, 1, 4], 25 : [4], 26 : [0, 1, 2], 27 : [0, 1, 4], 28 : [4], 29 : [0, 1, 2], 30 :  [0, 1, 4], 31 : [4], 32 : [0, 1, 1], 33 : [0, 2, 1], 34 : [0, 4, 1]}
-        self._newPoolIndex_ = None ### NEW: index where newly created pools start in self.V
         self.CMDS = [] #unpacked commands
         self.Patches = [] #mesh patches, list of objects of class XPLNEpatch
         self.V = [] # 3 dimensional list of all vertices whith V[PoolID][Vertex][xyz etc coordinates]
@@ -764,24 +777,22 @@ class XPLNEDSF:
         return 0
                                           
     
-    def _addVertexToPool_(self, v): #adds Vertex v to Pools V   v=[1,2,3] or v=[[1], [2], [3])???        ################# NEW ############ unclear if needed ??? ####
-        ## returns tuple (Pool_ID, index)
-        ### assumes that no different Pools for different height are needed (should all be with 1.000 m height difference)
-        ### assumes that maximum limit of 64.000 vertices per pool is not reached
-        if self._newPoolIndex_ == None:
-            self._newPoolIndex_ = len(self.V)
-            self.V.append(v)  ##to be tested!!! depends on v
-            self._log_.info("Created FIRST new Pool with index {} and first vertex {}".format(self._newPoolIndex_, self.V[_newPoolIndex_][0]))
-            return (self._newPoolIndex_, 0)
-        for i in range(self._newPoolIndex_, len(self.V)): ## go through all created pools
-            if len(self.V[i][0]) == len(v): ###??? depends on v  
-                for j in range(len(self.V[i])): #check if v is already in list
-                    if self.V[i][j] == v: ### to be checked if comparision is so simple
-                        return (i, j)
-                self.V[i].append(v) ### to be tested see, above
-                return (i, len(self.V[i]) - 1)
-        ### NEXT STEP: CREATE HERE NEW Pool for that array length
-        ###### ALSO CREATE SCALINGS FOR NEW POOLS!!!! AND CHECK THAT NEW VERTICES FIT FOR THAT SCALING
+    def _addVertexToPool_(self, v, t, p): #adds Vertex v = [lon, lat] inside tria t to Pool p ################# NEW ############
+        if self.V[t[0][0]][t[0][1]][2] > -32768 and self.V[t[1][0]][t[1][1]][2] > -32768 and self.V[t[2][0]][t[2][1]][2] > -32768:
+            ##all vertices have height directly assigned, probably no raster excisten, so also height for new vertex has to be calculated
+            l0, l1 = PointLocationInTria(v, self.TriaVertices(t)) # returns length for vectors from point t3 with l0*(t2-t0) and l1*(t2-t1)
+            height = self.V[t[2][0]][t[2][1]][2] + l0 * (self.V[t[0][0]][t[0][1]][2] - self.V[t[2][0]][t[2][1]][2])  + l1 * (self.V[t[1][0]][t[1][1]][2] - self.V[t[2][0]][t[2][1]][2])
+            #### tbd: in that case also VERTEX NORMAL HAS TO BE CALCULATED, BELOW JUST 0,0 is inserted !!! ################# !!!!!!!!!!
+            ######### special case when v is cutting Point on edge (in that case l0+l1 = 1) ---> normal vector of adjacent edge needed or get normal vector from two normals of ending points of edge?
+        else:
+            height = -32768.0
+        v_new = [ v[0], v[1], height, 0, 0 ] ####### TBD: Merge the calculation of height with the calculation of optional coords#################
+        for i in range(5, len(self.V[p][0])): #go through optional coordinates s, t values based on first vertex in according Pool
+            l0, l1 = PointLocationInTria(v, self.TriaVertices(t)) # returns length for vectors from point t3 with l0*(t2-t0) and l1*(t2-t1)
+            #####print("l0, l1 :", l0, l1, "anwenden auf:", self.V[t[0][0]][t[0][1]][i], self.V[t[1][0]][t[1][1]][i], self.V[t[2][0]][t[2][1]][i]) 
+            v_new.append(self.V[t[2][0]][t[2][1]][i] + l0 * (self.V[t[0][0]][t[0][1]][i] - self.V[t[2][0]][t[2][1]][i])  + l1 * (self.V[t[1][0]][t[1][1]][i] - self.V[t[2][0]][t[2][1]][i]) )
+        self.V[p].append(v_new) #append vertex to pool of 1. vertex ## actually normal vectors are -1.5259021896696368e-05 instead of 0
+
         
     def cutEdges(self, v, w): #cuts all edges of trias that intersect with segment from vertex v to w   ########### NEW ###########
         l = self.PatchesInArea(*self.BoundingRectangle([v,w]))   ### * converts returned tuple in an argument list
@@ -799,9 +810,11 @@ class XPLNEDSF:
                 for edge in range(3): # go through edges of tria by index numbers
                     cuttingPoint = intersection(v, w, tv[edge], tv[(edge+1)%3]) # modulo 3 returns to first vertex to close tria
                     if cuttingPoint:
-                        cuttingPoint = (cuttingPoint[0], cuttingPoint[1], edge) #store number of edge cut as third element
-                        iv.append(cuttingPoint)
-                        ### tbd: don't append if cuttingPoint is too close to existing vertex of tria --> max. 2 cutting Points !!!!!!!! ################## TBD ###########
+                        if distance(tv[0], cuttingPoint) < 20 or distance(tv[1], cuttingPoint) < 20 or distance(tv[2], cuttingPoint) < 20:  ###### TBD: accurcy as variable of function !!!! ######
+                            self._log_.info("Cutting Point {} not inserted as too close to vertex of the triangle it is in.".format(cuttingPoint))
+                        else:
+                            cuttingPoint = (cuttingPoint[0], cuttingPoint[1], edge) #store number of edge cut as third element
+                            iv.append(cuttingPoint)
                 if len(iv) == 2:
                     if iv[1][0] > iv[0][0] or (iv[1][0] == iv[0][0] and iv[1][1] > iv[0][1]):
                         iv[0], iv[1] = iv[1], iv[0] #make sure to always start with most western (or most southern if both have same west coordinate) cutting Point in order to always get same mesh for overlays
@@ -809,8 +822,10 @@ class XPLNEDSF:
                     self._log_.info("Two intersections found at {}.".format(iv))
                     v_Pool = t[0][0] #select Pool that will be extended by new cutting vertices by first point of tria
                     ################## CAUTION: code below is for specific vertex / pool with just 5 elements1!!! ####### CAUTION ####
-                    self.V[v_Pool].append([iv[0][0],iv[0][1],-32768.0,0,0]) #append vertex ## actually normal vectors are -1.5259021896696368e-05 instead of 0
-                    self.V[v_Pool].append([iv[1][0],iv[1][1],-32768.0,0,0]) #append vertex ## actually normal vectors are -1.5259021896696368e-05 instead of 0
+                    #self.V[v_Pool].append([iv[0][0],iv[0][1],-32768.0,0,0]) #append vertex ## actually normal vectors are -1.5259021896696368e-05 instead of 0
+                    #self.V[v_Pool].append([iv[1][0],iv[1][1],-32768.0,0,0]) #append vertex ## actually normal vectors are -1.5259021896696368e-05 instead of 0
+                    self._addVertexToPool_(iv[0], t, v_Pool)
+                    self._addVertexToPool_(iv[1], t, v_Pool)
                     v_Index = len(self.V[v_Pool]) - 1 #new vertex is at the end, so index of second inserted is length of Pool, for the one added before -1
                     self._log_.info("    Vertex added to Pool {} with index {} and coordinates {}.".format(v_Pool, v_Index, self.V[v_Pool][v_Index]))
                     self._log_.info("    Vertex added to Pool {} with index {} and coordinates {}.".format(v_Pool, v_Index-1, self.V[v_Pool][v_Index-1]))
@@ -831,7 +846,8 @@ class XPLNEDSF:
                     self._log_.info("One intersections found at {}.".format(iv))
                     v_Pool = t[0][0] #select Pool that will be extended by new cutting vertex by first point of tria
                     ################## CAUTION: code below is for specific vertex / pool with just 5 elements1!!! ####### CAUTION ####
-                    self.V[v_Pool].append([iv[0][0],iv[0][1],-32768.0,0,0]) #append vertex ## actually normal vectors are -1.5259021896696368e-05 instead of 0
+                    #self.V[v_Pool].append([iv[0][0],iv[0][1],-32768.0,0,0]) #append vertex ## actually normal vectors are -1.5259021896696368e-05 instead of 0
+                    self._addVertexToPool_(iv[0], t, v_Pool)
                     v_Index = len(self.V[v_Pool]) - 1 #new vertex is at the end, so index is length of Pool
                     self._log_.info("    Vertex added to Pool {} with index {} and coordinates {}.".format(v_Pool, v_Index, self.V[v_Pool][v_Index]))
                     new_trias.append([ [t[edge][0], t[edge][1]], [v_Pool, v_Index],  [t[(edge+2)%3][0], t[(edge+2)%3][1]] ])
@@ -860,14 +876,25 @@ class XPLNEDSF:
             return 1
         for p in l: #now go only through potential patches to check details
             for t in p.trias:
-                if isPointInTria(v, self.TriaVertices(t)):
-                    #### TBD: Don't instert v if too close to vertexes of Tria
-                    #### TBD: If too close to or evon on one tria edge, then cut edge instead of inserting vertex
+                tv = self.TriaVertices(t)
+                if isPointInTria(v, tv):
+                    if distance(tv[0], v) < 30 or distance(tv[1], v) < 30 or distance(tv[2], v) < 30:  ###### TBD: accurcy as variable of function !!!! ######
+                        self._log_.info("Vertex {} not inserted as too close to vertex of the triangle it is in.".format(v))
+                        return 1
+                    for e in range(3): #go through edges of tria and check if vertex v is too close to one of them
+                        ortho = [-(tv[e][1] - tv[(e+1)%3][1]), (tv[e][0] - tv[(e+1)%3][0])] #ortogonal vector to edge
+                        le, lo = PointLocationInTria(v, [tv[(e+1)%3], ortho, tv[e]]) #getting to now how far to go the edge to come to closest point le*e on the edge to v, lo is how far to go the ortho to reach v
+                        closestPoint = [tv[e][0] + le * (tv[(e+1)%3][0] - tv[e][0]), tv[e][1] + le * (tv[(e+1)%3][1] - tv[e][1])]
+                        if distance(v, closestPoint) < 30:  ###### TBD: accurcy as variable of function !!!! ######
+                            self._log_.info("Vertex {} is too close to one edge of the triangle it is in --> Edge will be cut at {} and cutting point will be inserted.".format(v, closestPoint))
+                            self.cutEdges(v, [v[0] - lo * 1.000001 * (ortho[0] - tv[e][0]),  v[1] - lo * 1.000001 * (ortho[1] - v[1])]) #  * 1.000001 to really cross edge with ortho vector in - direction
+                            return 1
                     #### TBD: Make sure Pool Index does not exceed/reach 2^16 --> Could be handled when pools are converted to binary
                     self._log_.info("Vertex {} lies in tria {} of patch number {}.".format(v, self.TriaVertices(t), self.Patches.index(p)))
                     self._log_.info("    This tria is defined by vertices in pool/index {}.".format(t))
                     self._log_.info("    First vertex of tria is {}.".format(self.V[t[0][0]][t[0][1]]))
                     v_Pool = t[0][0] #selct pool for new vertex based on first vertex of triangle
+                    ######### TBD: Use also function self._addVertexToPool_() instead of having code here below !!!!! ############################### !!!!
                     if self.V[t[0][0]][t[0][1]][2] > -32768 and self.V[t[1][0]][t[1][1]][2] > -32768 and self.V[t[2][0]][t[2][1]][2] > -32768:
                         ##all vertices have height directly assigned, probably no raster excisten, so also height for new vertex has to be calculated
                         l0, l1 = PointLocationInTria(v, self.TriaVertices(t)) # returns length for vectors from point t3 with l0*(t2-t0) and l1*(t2-t1)
@@ -1071,4 +1098,3 @@ class XPLNEDSF:
             f.write(m.digest())
         self._log_.info("Finshed writing dsf-file.")
         return 0
-
