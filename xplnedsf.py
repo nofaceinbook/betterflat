@@ -1,6 +1,6 @@
 #******************************************************************************
 #
-# xplnedsf.py        Version 0.21
+# xplnedsf.py        Version 0.3.1
 # ---------------------------------------------------------
 # Python module for reading and writing X_Plane DSF files.
 #
@@ -30,6 +30,8 @@ import struct #required for binary pack and unpack
 import hashlib #required for md5 hash in dsf file footer
 import logging #for output to console and/or file
 from io import BytesIO #required to go through bytes of a read 7ZIP-File
+from math import sin, cos, sqrt, atan2, radians ############################## NEW ### for distance calculation # place it in extra library later ########## NEW #########
+from bflatKMLexport import *  ########## just for test reasons  ### NEW ##
 
 try:
     import py7zlib
@@ -39,6 +41,88 @@ else:
     PY7ZLIBINSTALLED = True
 
 
+def distance(p1, p2): #calculates distance between p1 and p2 in meteres where p is pair of longitude, latitude values          ####### NEW ## from bflat ###########
+    R = 6371009 #mean radius earth in m
+    lon1 = radians(p1[0]) ##### NEW ######## WARNING: changed order as it is in bflat now !!!!!!!! ########### NEW ##################
+    lat1 = radians(p1[1])
+    lon2 = radians(p2[0])
+    lat2 = radians(p2[1]) 
+    dlon = lon2 - lon1
+    dlat = lat2 - lat1
+    a = sin(dlat / 2)**2 + cos(lat1) * cos(lat2) * sin(dlon / 2)**2
+    c = 2 * atan2(sqrt(a), sqrt(1 - a))   
+    return R * c
+
+def getPointsOnSegment (p, q, interval): ######## NEW #### was needed for cutting RWY profile  ###### PROBABLY TO BE DELETED !!!!! ##############
+    intervalsteps = round(distance (p, q) / interval) #number of intervals for segment
+    points = []
+    for i in range(intervalsteps+1):
+        x = p[0] + i * 1/intervalsteps * (q[0] - p[0])
+        y = p[1] + i * 1/intervalsteps * (q[1] - p[1])
+        points.append([x, y])
+    return points
+ 
+
+def isPointInTria(p, t):  #### NEW ####
+    denom = ((t[1][1] - t[2][1])*(t[0][0] - t[2][0]) + (t[2][0] - t[1][0])*(t[0][1] - t[2][1]))
+    if denom == 0: ### to be checked when this is the case!!!!
+        return 0
+    nom_a = ((t[1][1] - t[2][1])*(p[0] - t[2][0]) + (t[2][0] - t[1][0])*(p[1] - t[2][1]))
+    nom_b = ((t[2][1] - t[0][1])*(p[0] - t[2][0]) + (t[0][0] - t[2][0])*(p[1] - t[2][1]))
+    a = nom_a / denom
+    b = nom_b / denom
+    c = 1 - a - b
+    return (0 <= a <= 1 and 0 <= b <= 1 and 0 <= c <= 1)
+
+def PointLocationInTria(p, t):  ### TBD: Merge with isPointINTria, identical except return value !!!! ######### NEW #### NEW ####
+    denom = ((t[1][1] - t[2][1])*(t[0][0] - t[2][0]) + (t[2][0] - t[1][0])*(t[0][1] - t[2][1]))
+    if denom == 0: ### to be checked when this is the case!!!!
+        return 0
+    nom_a = ((t[1][1] - t[2][1])*(p[0] - t[2][0]) + (t[2][0] - t[1][0])*(p[1] - t[2][1]))
+    nom_b = ((t[2][1] - t[0][1])*(p[0] - t[2][0]) + (t[0][0] - t[2][0])*(p[1] - t[2][1]))
+    a = nom_a / denom
+    b = nom_b / denom
+    return (a, b) #returns multiplier for vector (t2 - t0) and for vector (t2 - t1) starting from point t2
+
+def PointInPoly(p, poly):  # test wether a point p with [lat, lon] coordinates lies in polygon (list of [lat, lon] pairs        ######## TAKEN FROM bflat.py ##############
+    # counts number of intersections from point outside poly to p on same y-coordinate, if it is odd the point lies in poly
+    # to avoid intersection at vertex of poly on same y-coordinate, such points are shifte about 1mm above for testing intersection
+    count = 0
+    for i in range(len(poly) - 1):  # for all segments in poly
+        epsilon0, epsilon1 = (0, 0)  # added to p's y coordinate in case p is on same y-coordinate than according vertex of segment
+        if poly[i][1] < p[1] and poly[i + 1][1] < p[1]:  # if vertices of segment below y-coordinate of p, no intersection
+            continue
+        if poly[i][1] > p[1] and poly[i + 1][1] > p[1]:  # if vertices of segment above y-coordinate of p, no intersection
+            continue
+        if poly[i][1] == p[1]:
+            epsilon0 = 0.00000001
+        if poly[i + 1][1] == p[1]:
+            epsilon1 = 0.00000001
+        x = intersection([poly[i][0], poly[i][1] + epsilon0], [poly[i + 1][0], poly[i + 1][1] + epsilon1], [181, p[1]], p)
+        if x:
+            count += 1
+    if count % 2:
+        return True  # odd number of intersections, so p in poly
+    else:
+        return False  # even number of intersection, so p outside poly
+
+
+def _linsolve_(a1, b1, c1, a2, b2, c2):  ### NEW - taken from bflat ###
+    divisor = (a1 * b2) - (a2 * b1)
+    if divisor == 0:  ####### TBD: HANDLE ERROR for colineear setting !!!!!!!!!!!!!!! #################
+        return (-99999, -99999)  ### points are colinear, might intersect or not ##### here None but with negative values calling intersection function returns None
+    return (round(((c1 * b2) - (c2 * b1)) / divisor, 8),
+            round(((a1 * c2) - (a2 * c1)) / divisor, 8))  # ROUNDING TO ALWAYS GET SAME CONCLUSION
+
+
+def intersection(p1, p2, p3, p4):  # checks if segment from p1 to p2 intersects segement from p3 to p4   ### NEW - taken from bflat ###
+    s0, t0 = _linsolve_(p2[0] - p1[0], p3[0] - p4[0], p3[0] - p1[0], p2[1] - p1[1], p3[1] - p4[1], p3[1] - p1[1])
+    if s0 >= 0 and s0 <= 1 and t0 >= 0 and t0 <= 1:
+        return (round((p1[0] + s0 * (p2[0] - p1[0])), 8), round(p1[1] + s0 * (p2[1] - p1[1]), 8))  ### returns the cutting point as tuple; ROUNDING TO ALWAYS GET SAME POINT ###### NEW ERROR CORRECTION #### NEW
+    else:                                                         ### ERROR CORRECTION: p2[1] - p1[1] instead of p1[1] - p1[1] above    ### for bflat ############## NEW #############
+        return (None)
+
+
 class XPLNEpatch:
     def __init__(self, flag, near, far, poolIndex, defIndex):
         self.flag = flag
@@ -46,6 +130,11 @@ class XPLNEpatch:
         self.far = far
         self.defIndex = defIndex
         self.cmds = []
+        self.trias = []  ###### NEW: store triangles calculated with triangles()  ###### TBD: really needed or use always functions triangles() and directly trias2cmds() to store changes?? ### NEW ## TBD ###
+        self.minx = 181  #set out of bound values first  #### NEW ####
+        self.maxx = -181 #will be set to bounding rectangle values for patch
+        self.miny = 91   #to quickly see if the patch applies for a certain ares
+        self.maxy = -91  #values set correctly with function _setPatchBoundary()_ after being read  
     def triangles(self): #returns triangles as a list l of [3 x vertexes] that are defined by commands c of thte patch where each vertex of triangle is a pair of index to pool p and vertex        
         l = []
         p = None #current pool needs to be defined with first command
@@ -61,15 +150,24 @@ class XPLNEpatch:
             elif c[0] == 25: # PATCH TRIANGLE RANGE 
                 for v in range(c[1], c[2] - 1, 3): #last index has one added 
                     l.append( [ [p, v], [p, v + 1], [p, v + 2] ] )
-            elif c[0] == 26: # PATCH TRIANGLE STRIP           
+            elif c[0] == 26: # PATCH TRIANGLE STRIP
                 for v in range (3, len(c)): #skip first three values - including command id are not needed any more
-                    l.append( [ [p, c[v-2]], [p, c[v-1]], [p, c[v]] ] )
-            elif c[0] == 27: # PATCH TRIANGLE STRIP CROSS POOL
+                    if v % 2: ##### NEW: Strip 1,2,3,4,5 refers to triangles 1,2,3 2,4,3 3,4,5 ############# NEW ########### ERROR CORRECTION ########## NEW ####
+                        l.append( [ [p, c[v-2]], [p, c[v-1]], [p, c[v]] ] )  ## NEW ##
+                    else:                                                    ## NEW ##
+                        l.append( [ [p, c[v-2]], [p, c[v]], [p, c[v-1]] ] )  ## NEW ##
+            elif c[0] == 27: # PATCH TRIANGLE STRIP CROSS POOL             
                 for v in range (6, len(c), 2): #skip first values - including command id are not needed any more
-                    l.append( [ [c[v-5], c[v-4]], [c[v-3], c[v-2]], [c[v-1], c[v]] ] )                                
+                    if v % 4: ##### NEW: Strip 1,2,3,4,5 refers to triangles 1,2,3 2,4,3 3,4,5 ############# NEW ########### ERROR CORRECTION ########## NEW ####
+                        l.append( [ [c[v-5], c[v-4]], [c[v-3], c[v-2]], [c[v-1], c[v]] ] )  ## NEW ##
+                    else:                                                                   ## NEW ##
+                        l.append( [ [c[v-5], c[v-4]], [c[v-1], c[v]], [c[v-3], c[v-2]] ] )  ## NEW ##
             elif c[0] == 28:  # PATCH TRIANGLE STRIP RANGE
                 for v in range(c[1], c[2] - 2): # last index has one added so -2 as we go 2 up and last in range is not counted
-                    l.append( [ [p, v], [p, v + 1], [p, v + 2] ] )
+                    if (v - c[1]) % 2:  ##### NEW: Strip 1,2,3,4,5 refers to triangles 1,2,3 2,4,3 3,4,5 ############# NEW ########### ERROR CORRECTION ########## NEW ####
+                        l.append( [ [p, v], [p, v + 2], [p, v + 1] ] ) ## NEW ##
+                    else:                                              ## NEW ##
+                        l.append( [ [p, v], [p, v + 1], [p, v + 2] ] ) ## NEW ##
             elif c[0] == 29: # PATCH TRIANGLE FAN                          ##(all FAN commands not yet tested!!!!!!!!)##
                 for v in range (3, len(c)): #skip first three values - including command id are not needed any more
                     l.append( [ [p, c[1]], [p, c[v-1]], [p, c[v]] ] ) #at c[1] is the center point id of the fan
@@ -80,6 +178,22 @@ class XPLNEpatch:
                 for v in range(c[1], c[2] - 2): # at c[1] center point; last index has one added so -2 as we go 2 up and last in range is not counted
                     l.append( [ [p, c[1]], [p, v + 1], [p, v + 2] ] )                    
         return l
+              
+    def trias2cmds(self):  ## For the moment only uses single tirangle CMDS for different pools ## To be updeated ############## NEW ######## NEW ############
+        self.cmds = [self.cmds[0]]
+        i = 0 #counts number of trias
+        c = [] #builds single commands
+        for t in self.trias:
+            if (i % 85) == 0: #start new triangle command at beginning and when max length is reached (3 value pairs per triangle, so 255 / 3 = 85)
+                if len(c) > 1: #are there already values for commands
+                    self.cmds.append(c) #append them the the commands
+                c = [24]
+            c.extend(t[0])
+            c.extend(t[1])
+            c.extend(t[2])
+            i += 1
+        if len(c) > 1:
+            self.cmds.append(c) #add the final command
 
 
 class XPLNEraster: #Stores data of Raster Atoms (each dsf could have serverl raster layers)
@@ -253,7 +367,8 @@ class XPLNEDSF:
                             i += 1
                 if encType == 1 or encType == 3: #values are also stored differenced
                     for i in range (1, nArrays):  
-                        V[-1][i][n] = (V[-1][i][n] + V[-1][i-1][n]) % 65536  #undo differntiation and modulo for wrapping two byte unsigned integer 
+                        V[-1][i][n] = (V[-1][i][n] + V[-1][i-1][n]) % 65536  #undo differntiation and modulo for wrapping two byte unsigned integer
+                                                         ##### NEW TBD #### FOR 32 Bit Pools adapt Moduls ??!! #################### NEW TBD ######################## NEW TBD ########
             self._updateProgress_(len(s))
 
 
@@ -318,6 +433,22 @@ class XPLNEDSF:
             for i in range(int(len(s) / 8) ):  #for each scaling tuple - 4 bytes multiplier and 4 bytes offset
                 m, o = struct.unpack('<ff', s[ i*8 : i*8 + 8] )  #retrieve multiplier and offset
                 Scalings[-1].append([m, o])
+
+    def _packAllScalings_(self): #packs the all Scalings incl. Scal32 values to binary atom strings to be later written to file ############ NEW ################ NEW function ####
+        self._log_.info("Start to pack and all saclings for pools.")
+        self._Atoms_['LACS'] = []
+        self._Atoms_['23CS'] = []
+        for s in self.Scalings:
+            encscal = b''
+            for i in s:
+                encscal += struct.pack('<ff', i[0], i[1])
+            self._Atoms_['LACS'].append(encscal)
+        for s in self.Scal32:
+            encscal = b''
+            for i in s:
+                encscal += struct.pack('<ff', i[0], i[1])
+            self._Atoms_['23CS'].append(encscal)                    
+    ####### End of new function _packScalings_ ############
 
                 
     def _scaleV_(self, bit = 16, reverse = False): #applies scaling to the vertices stored in V and V32
@@ -455,7 +586,7 @@ class XPLNEDSF:
         self._log_.info("Start to extract CMDS")
         for i in range(len(self.DefPolygons)):
             self.Polygons.append([]) #span list of empty lists for all defined poygon types
-        for i in range(len(self.DefObjects)): ########## OBJECTS NOT TESTED YET !!!!!!!!!!!!!!!!!!!!!!!!!!######
+        for i in range(len(self.DefObjects)): 
             self.Objects.append([]) #span list of empty lists for all defined poygon types
 
         patchPoolIndex = None #poolIndex currently used in current patch; if different from current in CMDS then change command is written to cmds of patch
@@ -468,6 +599,9 @@ class XPLNEDSF:
         subroadtype = 0
         junctionoffset = 0
         counter = 0
+        amount_of_two_percent_CMDS = int(len(self.CMDS)/50)  ### NEW ###
+        if amount_of_two_percent_CMDS == 0:                  ### NEW ###
+            amount_of_two_percent_CMDS = 1 #have 1 as minimal value in order to avoid devision by zero below   ### NEW ###
         for c in self.CMDS:
             if c[0] == 1: # new pool selection
                 poolIndex = c[1]
@@ -480,12 +614,12 @@ class XPLNEDSF:
             elif 7 <= c[0] <= 8: #Object Command
                 self.Objects[defIndex].append([poolIndex]) #new Polygond added for defIndex type and it starts with poolIndex from which its vertices are
                 self.Objects[defIndex][-1].extend(c) #followed by the complete command to build it
-            elif 9 <= c[0] <= 11: #Network Commands
+            elif 9 <= c[0] <= 11: #Network Commands ######################### NEW: each Network command put in sublists, addtional [] inclueded !!!! ################## NEW next 5 lines ##########
                 if self.Networks == []: #first network command, so start with first entry
-                    self.Networks.append([subroadtype, junctionoffset, poolIndex])
-                elif self.Networks[-1][0] != subroadtype or self.Networks[-1][1] != junctionoffset or self.Networks[-1][2] != poolIndex: #chang of relevant base settings
-                    self.Networks.append([subroadtype, junctionoffset, poolIndex]) #sp new entry with new base-settings
-                self.Networks[-1].extend(c) #append complete command to build this network part on current base settings
+                    self.Networks.append([[subroadtype, junctionoffset, poolIndex]])
+                elif self.Networks[-1][0][0] != subroadtype or self.Networks[-1][0][1] != junctionoffset or self.Networks[-1][0][2] != poolIndex: #chang of relevant base settings
+                    self.Networks.append([[subroadtype, junctionoffset, poolIndex]]) #sp new entry with new base-settings
+                self.Networks[-1].extend([c]) #append complete command to build this network part on current base settings
             elif 12 <= c[0] <= 15: #Polygon Commands
                 self.Polygons[defIndex].append([poolIndex]) #new Polygond added for defIndex type and it starts with poolIndex from which its vertices are
                 self.Polygons[defIndex][-1].extend(c) #followed by the complete command to build it
@@ -508,20 +642,118 @@ class XPLNEDSF:
                     return(1)
                 self.Patches[-1].cmds.append(c) 
             counter += 1
-            if not counter % (int(len(self.CMDS)/50)): #after every 2% processed of commands update progress 
+            if not counter % amount_of_two_percent_CMDS: #after every 2% processed of commands update progress  --> RAISES ERROR when less than 50 CMDS
                 self._updateProgress_(round(len(self._Atoms_['SDMC']) / 100)) #count only half of the length, other half by unpackCMDS
+        for p in self.Patches: #add to each patch its trias as list and the rectangle boundary coordinates of patch   ########### NEW ############# NEW #####
+            p.trias = p.triangles()   ##NEW##
+            self._setPatchBoundary_(p) ##NEW##
         self._log_.info("{} patches extracted from commands.".format(len(self.Patches)))
         self._log_.info("{} different Polygon types including there definitions extracted from commands.".format(len(self.Polygons)))
         self._log_.info("{} different Objects with placements coordinates extracted from commands.".format(len(self.Objects)))
         self._log_.info("{} different Network subtypes extracted from commands (could include double count).".format(len(self.Networks)))
 
+    def _packCMDS_(self): #packs all CMDS of Object, Polygons, Networks and Patches in binary string to be later written to file #####NEW FUCTION### NEW ####
+        def encCMD(c): #encodes single CMD in array c and returns its binary
+            ecmd = b'' 
+            id = c[0] #id of CMD stored as first value in list
+            if id == 3 and c[1] > 255: #avoid errors if definition is too big for command id 3
+                id = 4
+            if id == 4 and c[1] > 65535: #avoid errors if definition is too big for command id 4
+                id = 5
+            ecmd += struct.pack('<B', id) #encode CMD id
+            i = 1 #index in value list to be packed
+            if id in self._CMDStructure_: 
+                for valtype in self._CMDStructure_[id][0]: #pack fixed length values of CMD
+                    ecmd += struct.pack('<' + valtype, c[i])
+                    i += 1
+                if len(self._CMDStructLen_[id]) == 3: #pack command with variable length 
+                    vlength = int( (len(c) - i) / len(self._CMDStructure_[id][2]) ) #fixed values inclding CMD id are counting not for the variable length, so minus i #### TBD: Test that this value does not exceed 255!!!!!! ####
+                    if vlength > 255: #make sure that length is not longer than could be encoded in one byte
+                        self._log_.error("Length of CMD with id {} and length {} does exceed 255 and will not be included!!!".format(id, vlength))
+                        return(b'')
+                    if id == 15:
+                        vlength -= 1 #id = 15 seems a special case that there is one index more than windings 
+                    ecmd += struct.pack('<B', vlength) #count packed
+                    while i < len(c): #now pack the variable length value list
+                        for valtype in self._CMDStructure_[id][2]: #pack fixed length individual value
+                            ecmd += struct.pack('<' + valtype, c[i])
+                            i += 1
+            else:
+                ######### TBD: include special code for CMD 14 here!!! ########## TBD ########### TBD ########### TBD ########### TBD ############### TBD ###########
+                self._log_.error("CMD id {} is not supported (CMD 14 not implemented yet)! Will be skipped!!".format(id))
+                return(b'')
+            return(ecmd)
+        ### end of inner function to pack single CMDS ###   
+        self._log_.info("Start to pack CMDS")
+        #SET state variables
+        flag_physical = None
+        nearLOD = None  
+        farLOD = None
+        poolIndex = None
+        defIndex = None
+        subroadtype = None
+        junctionoffset = None  #### set to 0 if directly set below as in X-Plane standard dsf files
+        enccmds = bytearray() #these will be the encoded CMDS to be returned  ################ TBD CHECK if this local instanced variable really will be copied and stay in object ?????? ##################
+        for d in self.DefObjects: #for each object definition write according CMDS
+            enccmds.extend(encCMD([3, d])) #definition set according to current definition id; function will handle if id > 255
+            for c in self.Objects[d]:
+                if c[0] != poolIndex: #Pool-Index is written before CMD; adapt index if it changes
+                    enccmds.extend(encCMD([1, c[0]]))
+                    poolIndex = c[0]
+                enccmds.extend(encCMD(c[1:])) #now according command to place objects is encoded  #### TO BE TESTED if it works as part of array???????
+        for d in self.DefPolygons: #for each polygon definition write according CMDS
+            enccmds.extend(encCMD([3, d])) #definition set according to current definition id; function will handle if id > 255
+            for c in self.Polygons[d]:
+                if c[0] != poolIndex: #Pool-Index is written before CMD; adapt index if it changes
+                    enccmds.extend(encCMD( [1, c[0]] ))
+                    poolIndex = c[0]
+                enccmds.extend(encCMD(c[1:])) #now according command to place objects is encoded  #### TO BE TESTED if it works as part of array???????        
+        for d in self.Networks:
+            if d[0][1] != junctionoffset: ## Order in org X-Plane files is with CMD id 2 at first
+                enccmds.extend(encCMD([2, d[0][1]]))
+                junctionoffset = d[0][1]
+            if defIndex != 0:
+                enccmds.extend(encCMD([3, 0])) #Currently there is only one Road-Defintion --> DefIndex set to 0
+                defIndex = 0
+            if d[0][2] != poolIndex:
+                enccmds.extend(encCMD([1, d[0][2]]))
+                poolIndex = d[0][2]
+            if d[0][0] != subroadtype:  ## Order in org X-Plane files is with 6 at last
+                enccmds.extend(encCMD([6, d[0][0]]))
+                subroadtype = d[0][0]
+            for c in d[1:]:
+                enccmds.extend(encCMD(c))
+        for d in self.Patches:
+            if defIndex != d.defIndex:
+                enccmds.extend(encCMD([3, d.defIndex])) #definition set according to current definition id; function will handle if id > 255
+                defIndex = d.defIndex
+            if poolIndex != d.cmds[0][1]: #Pool-Index is defined by first command and required to be defined directly before new Patch is defined!
+                enccmds.extend(encCMD([1, d.cmds[0][1]]))
+                poolIndex = d.cmds[0][1]
+            if nearLOD == d.near and farLOD == d.far:
+                if flag_physical == d.flag:
+                    enccmds.extend(encCMD([16]))
+                else:
+                    enccmds.extend(encCMD([17, d.flag]))
+                    flag_physical = d.flag
+            else:
+                enccmds.extend(encCMD([18, d.flag, d.near, d.far]))
+                farLOD = d.far
+                nearLOD = d.near
+                flag_physical = d.flag
+            for c in d.cmds[1:]:   ##skip first command as this is pool defintion written above
+                enccmds.extend(encCMD(c))
+        self._Atoms_['SDMC'] = enccmds #Commands Atom now set to the now packed CMDS
+        self._log_.info("Ended to pack CMDS")
+ ########### END of NEW function _packCMDS_() #################               
+                
 
     def _unpackAtoms_(self): #starts all functions to unpack and extract data froms strings in Atoms
         self._log_.info("Extracting properties and definitions.")
         if 'PORP' in self._Atoms_:
             self._extractProps_()
         else:
-            self._log_.error("This dsf file has not properties defined!")
+            self._log_.error("This dsf file has no properties defined!")
         if 'NFED' in self._Atoms_:    
             self._extractDefs_()
         else:
@@ -554,10 +786,375 @@ class XPLNEDSF:
 
     def _packAtoms_(self): #starts all functions to write all variables to strings (for later been written to file)
         self._log_.info("Preparing data to be written to file.")
-        self._log_.info("This version only applies changes to POOL atoms (all other atoms are written as read)!")
+        self._log_.info("This version only applies changes to POOL, CMDS and SCAL atoms (all other atoms inc. SC32 are written as read)!")
         self._scaleV_(16, True) #de-scale again 
         self._encodePools_()
+        self._packAllScalings_()
+        self._packCMDS_()
         return 0
+    
+    def _setPatchBoundary_(self, p): #sets min/max values of patch p          ################ NEW #############
+        for t in p.trias:
+            for v in t: #all vertexes of each triangle in patch
+                if self.V[v[0]][v[1]][0] < p.minx:
+                    p.minx = self.V[v[0]][v[1]][0]
+                if self.V[v[0]][v[1]][0] > p.maxx:
+                    p.maxx = self.V[v[0]][v[1]][0]
+                if self.V[v[0]][v[1]][1] < p.miny:
+                    p.miny = self.V[v[0]][v[1]][1]
+                if self.V[v[0]][v[1]][1] > p.maxy:
+                    p.maxy = self.V[v[0]][v[1]][1]
+        #####################self._log_.info("Patch Boundary x between {} - {} and y between {} - {}.".format(p.minx, p.maxx, p.miny, p.maxy))
+        return 0
+                                          
+    
+    def _addVertexToPool_(self, v, t, p): #adds Vertex v = [lon, lat] inside tria t to Pool p ################# NEW ############
+        if self.V[t[0][0]][t[0][1]][2] > -32768 and self.V[t[1][0]][t[1][1]][2] > -32768 and self.V[t[2][0]][t[2][1]][2] > -32768:
+            #all vertices have height directly assigned, probably no raster excistent, so also height for new vertex has to be calculated
+            l0, l1 = PointLocationInTria(v, self.TriaVertices(t)) # returns length for vectors from point t3 with l0*(t2-t0) and l1*(t2-t1)
+            height = self.V[t[2][0]][t[2][1]][2] + l0 * (self.V[t[0][0]][t[0][1]][2] - self.V[t[2][0]][t[2][1]][2])  + l1 * (self.V[t[1][0]][t[1][1]][2] - self.V[t[2][0]][t[2][1]][2])
+            #### Note: In case no raster is existent also the vertex normal has to be adapted (to be done in later step for all new vertices)
+        else:
+            height = -32768.0
+        v_new = [ v[0], v[1], height, 0, 0 ] ## actually normal vectors are -1.5259021896696368e-05 instead of 0
+        for i in range(5, len(self.V[p][0])): #go through optional coordinates s, t values based on first vertex in according Pool
+            l0, l1 = PointLocationInTria(v, self.TriaVertices(t)) # returns length for vectors from point t3 with l0*(t2-t0) and l1*(t2-t1)
+            v_new.append(self.V[t[2][0]][t[2][1]][i] + l0 * (self.V[t[0][0]][t[0][1]][i] - self.V[t[2][0]][t[2][1]][i])  + l1 * (self.V[t[1][0]][t[1][1]][i] - self.V[t[2][0]][t[2][1]][i]) )
+        self.V[p].append(v_new) #append vertex to pool p
+        #### TBD: Make sure Pool Index for pool p does not exceed/reach 2^16 --> Could be handled when pools are converted to binary #### TBD ###
+
+        
+    def cutEdges(self, v, w, accuracy = 10): #cuts all edges of trias that intersect with segment from vertex v to w, if existing vertices/edges are closer than accuracy in m, they will be used   ########### NEW #########
+        ## Note: If edge is completely within a tria then nothing is cut. In that case the segment will be inserted by just inserting the vertices of the edge
+        #### TBD: What happens if segment vw is overlapping an existing edge of the tria?? Function intersection will not return values so only endpoints of vw or other cutting points outside should be inserted and thus fine. But to be checked !!!! ### TBD ###
+        cPs = [] #functions returns a list of tuples to vertices (pool ID, index) that are lying on intersection line v to w (either created or used within accuracy)
+        l = self.PatchesInArea(*self.BoundingRectangle([v,w]))   ### * converts returned tuple in an argument list
+        self._log_.info("Inserting segement from {} to {} into mesh, which is relevant in {} patches.".format(v, w, len(l)))
+        if len(l) == 0:
+            self._log_.error("No relevant patch for segment from {} to {} found. Nothing to cut!".format(v, w))
+            return 0
+        for p in l: #now go only through potential patches to check details
+            new_trias = [] #trias to be added when cutting in patch
+            old_trias = [] #old trias to be removed when cutting in patch
+            for t in p.trias:
+                tv = self.TriaVertices(t)
+                iv = [] #list of intersection vertices between line vw and edges of triangle t, could be between 0 and 3
+                for edge in range(3): # go through edges of tria by index numbers
+                    cuttingPoint = intersection(v, w, tv[edge], tv[(edge+1)%3]) # modulo 3 returns to first vertex to close tria
+                    if cuttingPoint:
+                        existing_vertex_close = False
+                        for i in range(3): #check if v is too close to vertex of tria
+                            if distance(tv[i], cuttingPoint) < accuracy: 
+                                self._log_.info("   Cutting Point {} not inserted as too close to vertex of the triangle it is in.".format(cuttingPoint))
+                                cPs.append((t[i][0], t[i][1])) ### Attention: adds all vertices of t that are within accuracy, not just one
+                                existing_vertex_close = True
+                        if not existing_vertex_close:
+                                cuttingPoint = (cuttingPoint[0], cuttingPoint[1], edge) #store number of edge cut as third element
+                                iv.append(cuttingPoint)
+                if len(iv) == 2:
+                    if iv[1][0] > iv[0][0] or (iv[1][0] == iv[0][0] and iv[1][1] > iv[0][1]):
+                        iv[0], iv[1] = iv[1], iv[0] #make sure to always start with most western (or most southern if both have same west coordinate) cutting Point in order to always get same mesh for overlays
+                    self._log_.info("   Two intersections found at {}.".format(iv))
+                    v_Pool = t[0][0] #select Pool that will be extended by new cutting vertices by first point of tria
+                    self._addVertexToPool_(iv[0], t, v_Pool)
+                    self._addVertexToPool_(iv[1], t, v_Pool)
+                    v_Index = len(self.V[v_Pool]) - 1 #new vertex is at the end, so index of second inserted is length of Pool, for the one added before -1
+                    cPs.append((v_Pool, v_Index - 1))
+                    cPs.append((v_Pool, v_Index))
+                    self._log_.info("    Vertex added to Pool {} with index {} and coordinates {}.".format(v_Pool, v_Index, self.V[v_Pool][v_Index]))
+                    self._log_.info("    Vertex added to Pool {} with index {} and coordinates {}.".format(v_Pool, v_Index-1, self.V[v_Pool][v_Index-1]))
+                    edge = iv[0][2] ## start with edge with west/southern cutting point having index v_Index-1 (was inserted first)
+                    if iv[1][2] == (iv[0][2] + 1) % 3: #second cutting point lies on next edge
+                        new_trias.append([ [v_Pool, v_Index-1], [t[(edge+1)%3][0], t[(edge+1)%3][1]], [v_Pool, v_Index] ])
+                        new_trias.append([ [v_Pool, v_Index-1], [v_Pool, v_Index], [t[(edge+2)%3][0], t[(edge+2)%3][1]] ])
+                        new_trias.append([ [v_Pool, v_Index-1],  [t[(edge+2)%3][0], t[(edge+2)%3][1]], [t[edge][0], t[edge][1]] ])
+                    else: #second cutting point must lie on previous edge
+                        new_trias.append([ [v_Pool, v_Index-1], [t[(edge+1)%3][0], t[(edge+1)%3][1]],  [t[(edge+2)%3][0], t[(edge+2)%3][1]] ])
+                        new_trias.append([ [v_Pool, v_Index-1], [t[(edge+2)%3][0], t[(edge+2)%3][1]], [v_Pool, v_Index]  ])
+                        new_trias.append([ [v_Pool, v_Index-1], [v_Pool, v_Index], [t[edge][0], t[edge][1]] ])
+                    old_trias.append(t)                   
+                elif len(iv) == 1:
+                    edge = iv[0][2]
+                    self._log_.info("   One intersections found at {}.".format(iv))
+                    v_Pool = t[0][0] #select Pool that will be extended by new cutting vertex by first point of tria
+                    self._addVertexToPool_(iv[0], t, v_Pool)
+                    v_Index = len(self.V[v_Pool]) - 1 #new vertex is at the end, so index is length of Pool
+                    cPs.append((v_Pool, v_Index))
+                    self._log_.info("    Vertex added to Pool {} with index {} and coordinates {}.".format(v_Pool, v_Index, self.V[v_Pool][v_Index]))
+                    new_trias.append([ [t[edge][0], t[edge][1]], [v_Pool, v_Index],  [t[(edge+2)%3][0], t[(edge+2)%3][1]] ])
+                    new_trias.append([ [v_Pool, v_Index], [t[(edge+1)%3][0], t[(edge+1)%3][1]], [t[(edge+2)%3][0], t[(edge+2)%3][1]] ])
+                    old_trias.append(t)
+            for nt in new_trias:
+                p.trias.append(nt)
+                self._log_.info("    Added triangle  {} to Patch {}.".format(nt, self.Patches.index(p)))
+                self._log_.info("         Having coordinates {}.".format(self.TriaVertices(nt)))
+            for ot in old_trias:
+                p.trias.remove(ot)
+                self._log_.info("    Removed triangle  {}.".format(ot))
+                self._log_.info("         Having coordinates {}.".format(self.TriaVertices(ot)))
+            p.trias2cmds() ##Update Commands accordingly
+        return cPs 
+                     
+                     
+    def insertVertex(self, v, accuracy=10): #adds new vertex to dsf and updates mesh accordingly, returns exsting verticy when it is closer than accuracy in m, returns tuple of Pool, Index as set   ########### NEW ###########
+        l = []
+        iPs = [] #functions returns a list of tuples to vertices (pool ID, index) that have been inserted  #####NEW3 
+        for p in self.Patches:
+            if p.minx <= v[0] <= p.maxx and p.miny <= v[1] <= p.maxy:
+                l.append(p)
+        self._log_.info("Inserting Vertex {} in mesh, which is relevant in {} patches.".format(v, len(l)))
+        if len(l) == 0:
+            self._log_.error("Vertex {} cannot be inserted as there is no valid Patch found. Check coordinates!".format(v))
+            return 0
+        for p in l: #now go only through potential patches to check details
+            for t in p.trias:
+                tv = self.TriaVertices(t)
+                if isPointInTria(v, tv):
+                    for i in range(3): #check if no vertex of triangle is close to v
+                        if distance(tv[i], v) < accuracy: 
+                            self._log_.info("Vertex {} not inserted as too close to vertex of the triangle it is in.".format(v))
+                            return [ (t[i][0], t[i][1]) ] ########### PPROBLEM: ONLY RETURNS ONE VERTEX and not all others from other terrain patches --> might be issue for insert RWYprofile in mesh
+                    for e in range(3): #go through edges of tria and check if vertex v is too close to one of them
+                        ortho = [-(tv[e][1] - tv[(e+1)%3][1]), (tv[e][0] - tv[(e+1)%3][0])] #ortogonal vector to edge
+                        le, lo = PointLocationInTria(v, [tv[(e+1)%3], ortho, tv[e]]) #getting to now how far to go the edge to come to closest point le*e on the edge to v, lo is how far to go the ortho to reach v
+                        closestPoint = [tv[e][0] + le * (tv[(e+1)%3][0] - tv[e][0]), tv[e][1] + le * (tv[(e+1)%3][1] - tv[e][1])]
+                        if distance(v, closestPoint) < accuracy:  ###### TBD: accurcy as variable of function !!!! ######
+                            self._log_.info("Vertex {} is too close to one edge of the triangle it is in --> Edge will be cut at {} and cutting point will be inserted.".format(v, closestPoint))
+                            return self.cutEdges(v, [v[0] - lo * 1.001 * (ortho[0] - tv[e][0]),  v[1] - lo * 1.001 * (ortho[1] - v[1])], accuracy) #### NEW2 REDUCED fro,  * 1.000001 to * 1.001 toreally cross edge with ortho vector in - direction ### NEW 2
+                            ##### TBD: make multiplier * 1.001 variable dependent how far the point to be inserted is from the edge!!!! ##############
+                    #### TBD: Make sure Pool Index does not exceed/reach 2^16 --> Could be handled when pools are converted to binary
+                    #self._log_.info("Vertex {} lies in tria {} of patch number {}.".format(v, self.TriaVertices(t), self.Patches.index(p)))
+                    #self._log_.info("    This tria is defined by vertices in pool/index {}.".format(t))
+                    #self._log_.info("    First vertex of tria is {}.".format(self.V[t[0][0]][t[0][1]]))
+                    v_Pool = t[0][0] #selct pool for new vertex based on first vertex of triangle
+                    self._addVertexToPool_(v, t, v_Pool) 
+                    v_Index = len(self.V[v_Pool]) - 1 #new vertex is at the end, so index is length of Pool
+                    iPs.append((v_Pool, v_Index)) #NEW3
+                    self._log_.info("    Vertex added to Pool {} with index {} and coordinates {}.".format(v_Pool, v_Index, self.V[v_Pool][v_Index]))
+                    p.trias.append([ [v_Pool, v_Index], [t[0][0], t[0][1]], [t[1][0], t[1][1]] ])
+                    self._log_.info("    Added triangle {}.".format(p.trias[-1]))
+                    p.trias.append([ [v_Pool, v_Index], [t[1][0], t[1][1]], [t[2][0], t[2][1]] ])
+                    self._log_.info("    Added triangle {}.".format(p.trias[-1]))
+                    p.trias.append([ [v_Pool, v_Index], [t[2][0], t[2][1]], [t[0][0], t[0][1]] ])
+                    self._log_.info("    Added triangle {}.".format(p.trias[-1]))
+                    p.trias.remove(t)
+                    self._log_.info("    Removed triangle {}.".format(t))
+                    break #in same patch there will be no further triangle where v is in
+            p.trias2cmds() #Update Commands accordingly
+        return iPs
+    
+    def cutPolyInMesh(self, poly, accuracy=10): ### NEW #### #updates dsf mesh to contain the polygon shape as edges (if existing vertices, edges are closer than accourcy in m they will be used), elevation will be given by mesh  ######## NEW #####
+        self._log_.info("Cutting Polygon with {} vertices into the mesh.".format(len(poly) - 1))
+        border_vertices = set() #will inclued all vertices of new and existing vertices defining the border of the poly within the mesh
+        for i in range(len(poly) - 1):   # assumes that last vertex in poly is same as first, to have a closed polygon
+            for v in self.cutEdges(poly[i], poly[i+1], accuracy):
+                border_vertices.add(v)
+            for v in self.insertVertex(poly[i], accuracy): 
+                border_vertices.add(v)
+        inner_vertices = set()
+        l = self.PatchesInArea(*self.BoundingRectangle(poly))
+        for p in l:
+            for t in p.trias:
+                vt = self.TriaVertices(t)
+                for i in range(3):
+                    if PointInPoly(vt[i], poly):
+                        inner_vertices.add((t[i][0], t[i][1]))
+        self._log_.info("Cutting Polygon done. Now there are {} vertices inside and at the border of the Polygon in the mesh.".format(len(border_vertices.union(inner_vertices))))
+        return border_vertices.union(inner_vertices)
+        # retruned vertices have to be set to required elevation
+        ## TBD normal vectors of these vertices need to be updated if no raster is existent / used
+        
+    def cutRwyProfileInMesh(self, rwy, interval=20): ###NEW######
+        #cuts runway in mesh with intersections of runway every interval meter; allows to set granular elevation
+        self._log_.info("Cutting Runway with boundary {} into the mesh, having intersecitons every {} m.".format(rwy, interval))
+        accuracy = 1 ######### TBD check if 1m accuracy is right value for cutting RWY Boundary
+        verticesOnShoulder_A = set() #will inclued all vertices of shoulder A of RWY (= one side of RWY)
+        dictShoulder_A = {} #dictonary for shoulder with key is distance from point rwy[1] and pool/vertex id to a vertex as value
+        for v in self.cutEdges(rwy[1], rwy[2], accuracy):
+            verticesOnShoulder_A.add(v)
+            if len(self.V[v[0]][v[1]]) == 5: #only use vertices with additional s/t coordinates ### TBD: create if none exist!!
+                dictShoulder_A[round(distance(rwy[1], self.V[v[0]][v[1]]), 3)] = v
+            self._log_.info("+++ Added coordinates for RWY Border A: {}".format(self.V[v[0]][v[1]])) ####### JUST FOR CHECK ### TO BE REMOVED !! ###
+        for v in self.insertVertex(rwy[1], accuracy):
+            verticesOnShoulder_A.add(v)
+            if len(self.V[v[0]][v[1]]) == 5: #only use vertices with additional s/t coordinates ### TBD: create if none exist!!
+                dictShoulder_A[0] = v
+            self._log_.info("+++ Added coordinates for buttom A RWY Corner: {}".format(self.V[v[0]][v[1]])) ####### JUST FOR CHECK ### TO BE REMOVED !! ###
+        for v in self.insertVertex(rwy[2], accuracy):
+            verticesOnShoulder_A.add(v)
+            if len(self.V[v[0]][v[1]]) == 5: #only use vertices with additional s/t coordinates ### TBD: create if none exist!!
+                dictShoulder_A[distance (rwy[1], rwy[2])] = v
+            self._log_.info("+++ Added coordinates for top A RWY Corner: {}".format(self.V[v[0]][v[1]])) ####### JUST FOR CHECK ### TO BE REMOVED !! ###            
+        ###dictShoulder_A[distance (rwy[1], rwy[2])] = False ### TBD: Are first and last point of Shoulder really added like that??
+        verticesOnShoulder_B = set() #will inclued all vertices of shoulder B of RWY (= one side of RWY)
+        dictShoulder_B = {} #dictonary for shoulder with key is distance from point rwy[0] and pool/vertex id to a vertex as value
+        for v in self.cutEdges(rwy[0], rwy[3], accuracy):
+            verticesOnShoulder_B.add(v)
+            if len(self.V[v[0]][v[1]]) == 5: #only use vertices with additional s/t coordinates ### TBD: create if none exist!!
+                dictShoulder_B[round(distance(rwy[0], self.V[v[0]][v[1]]), 3)] = v
+            self._log_.info("+++ Added coordinates for RWY Border B: {}".format(self.V[v[0]][v[1]])) ####### JUST FOR CHECK ### TO BE REMOVED !! ###
+        for v in self.insertVertex(rwy[0], accuracy):
+            verticesOnShoulder_B.add(v)
+            if len(self.V[v[0]][v[1]]) == 5: #only use vertices with additional s/t coordinates ### TBD: create if none exist!!
+                dictShoulder_B[0] = v
+            self._log_.info("+++ Added coordinates for buttom B RWY Corner: {}".format(self.V[v[0]][v[1]])) ####### JUST FOR CHECK ### TO BE REMOVED !! ###
+        for v in self.insertVertex(rwy[2], accuracy):
+            verticesOnShoulder_B.add(v)
+            if len(self.V[v[0]][v[1]]) == 5: #only use vertices with additional s/t coordinates ### TBD: create if none exist!!
+                dictShoulder_B[distance (rwy[1], rwy[2])] = v #insert in dict with distance from border A in order to avoid deviation in distance and such doubled vertices and end
+            self._log_.info("+++ Added coordinates for top B RWY Corner: {}".format(self.V[v[0]][v[1]])) ####### JUST FOR CHECK ### TO BE REMOVED !! ###   
+        ###dictShoulder_B[distance (rwy[0], rwy[3])] = False ### TBD: Are first and last point of Shoulder really added like that??
+        ############### TBD: Also insert buttom and top line of RWY !!!!!!!
+        for k in dictShoulder_B: #add all distances in Shoulder B to Directory of Shoulder A, so that there are always oposite vertices
+            for v in self.insertVertex([rwy[1][0] + k / distance(rwy[0], rwy[3]) * (rwy[2][0] - rwy[1][0]), rwy[1][1] + k / distance(rwy[0], rwy[3]) * (rwy[2][1] - rwy[1][1])], accuracy):
+                verticesOnShoulder_A.add(v)
+                if len(self.V[v[0]][v[1]]) == 5: #only use vertices with additional s/t coordinates ### TBD: create if none exist!!
+                    dictShoulder_A[k] = v
+                self._log_.info("+++ Added coordinates for RWY Border B which was opposite on Border A: {}".format(self.V[v[0]][v[1]])) ####### JUST FOR CHECK ### TO BE REMOVED !! ###
+        for k in dictShoulder_A: #add all distances in Shoulder A to Directory of Shoulder B, so that there are always oposite vertices
+            for v in self.insertVertex([rwy[0][0] + k / distance(rwy[1], rwy[2]) * (rwy[3][0] - rwy[0][0]), rwy[0][1] + k / distance(rwy[1], rwy[2]) * (rwy[3][1] - rwy[0][1])], accuracy):
+                verticesOnShoulder_B.add(v)
+                if len(self.V[v[0]][v[1]]) == 5: #only use vertices with additional s/t coordinates ### TBD: create if none exist!!
+                    dictShoulder_B[k] = v
+                self._log_.info("+++ Added coordinates for RWY Border A which was opposite on Border B: {}".format(self.V[v[0]][v[1]])) ####### JUST FOR CHECK ### TO BE REMOVED !! ###                    
+        intervalposition = 0
+        distances_shoulderA = [] #actually the calculated coordinates  ######### TBD: Distance Array not needed any more --> to be deleted
+        ############ TBD: When inserting intervals use half of accurcy then for creating boundary to avoid specific error cases!!!!!
+        rwyAcoords = [] #sorted coordinates of RWY border A from buttom to top of RWY
+        rwyBcoords = [] #sorted coordinates of RWY border B from buttom to top of RWY
+        rwyApv = [] #sorted list on pool/vertex ids to build new rwy trias for RWY border A
+        rwyBpv = [] #sorted list on pool/vertex ids to build new rwy trias for RWY border B
+        for k in sorted(dictShoulder_A.keys()):
+            width = (k-intervalposition) / (int((k - intervalposition) / interval) + 1) #define new width for intervals with maximum length of interval to next point in dict
+            intervalposition += width #skip first already included vertex ##TBD: check if could be done better
+            while intervalposition < int(k):
+                distances_shoulderA.append(intervalposition) #actually the calculated coordinates as below; might be removed
+                for v in self.insertVertex([rwy[1][0] + intervalposition / distance(rwy[1], rwy[2]) * (rwy[2][0] - rwy[1][0]), rwy[1][1] + intervalposition / distance(rwy[1], rwy[2]) * (rwy[2][1] - rwy[1][1])], accuracy):
+                    verticesOnShoulder_A.add(v)
+                    if len(self.V[v[0]][v[1]]) == 5:  #only use vertices with additional s/t coordinates ### TBD: create if none exist!!
+                        rwyApv.append(v)
+                    self._log_.info("+++ Added coordinates in interval for Border A: {}".format(self.V[v[0]][v[1]])) ####### JUST FOR CHECK ### TO BE REMOVED !! ###
+                rwyAcoords.append((self.V[v[0]][v[1]][0], self.V[v[0]][v[1]][1]))
+                intervalposition += width
+            distances_shoulderA.append(k) ##might be reomved, not needed
+            v = dictShoulder_A[k] #current vertex is now at position in dictonary
+            rwyApv.append(v)
+            rwyAcoords.append((self.V[v[0]][v[1]][0], self.V[v[0]][v[1]][1]))
+            intervalposition = int(k)
+        intervalposition = 0
+        distances_shoulderB = [] ######### TBD: Distance Array not needed any more --> to be deleted
+        for k in sorted(dictShoulder_B.keys()):
+            width = (k-intervalposition) / (int((k - intervalposition) / interval) + 1) #define new width for intervals with maximum length of interval to next point in dict
+            intervalposition += width #skip first already included vertex ##TBD: check if could be done better
+            while intervalposition < int(k):
+                distances_shoulderB.append(intervalposition) #actually the calculated coordinates as below; might be removed
+                for v in self.insertVertex([rwy[0][0] + intervalposition / distance(rwy[0], rwy[3]) * (rwy[3][0] - rwy[0][0]), rwy[0][1] + intervalposition / distance(rwy[0], rwy[3]) * (rwy[3][1] - rwy[0][1])], accuracy):
+                    verticesOnShoulder_B.add(v)
+                    if len(self.V[v[0]][v[1]]) == 5:  #only use vertices with additional s/t coordinates ### TBD: create if none exist!!
+                        rwyBpv.append(v)
+                    self._log_.info("+++ Added coordinates in interval for RWY Border B: {}".format(self.V[v[0]][v[1]])) ####### JUST FOR CHECK ### TO BE REMOVED !! ###
+                rwyBcoords.append((self.V[v[0]][v[1]][0], self.V[v[0]][v[1]][1]))
+                intervalposition += width
+            distances_shoulderB.append(k) #actually the coordinates in dict
+            v = dictShoulder_B[k] #current vertex is now at position in dictonary
+            rwyBpv.append(v)
+            rwyBcoords.append((self.V[v[0]][v[1]][0], self.V[v[0]][v[1]][1]))
+            intervalposition = int(k)
+        self._log_.info("CREATED RUNWAY PROFILE:")
+        for i in range(len(rwyAcoords)):
+            self._log_.info("Interval at {}m {} coords:{}    opposite {}m {} coords:{} ".format(round(distance(rwyAcoords[0], rwyAcoords[i]), 3), rwyApv[i], rwyAcoords[i], round(distance(rwyBcoords[0], rwyBcoords[i]), 3), rwyBpv[i], rwyBcoords[i]))
+        ############ TBD: Double check that rwyABcoords are same len and that really always on opposite vertex is existent
+        inner_vertices = set() ### Find vertices inside rwy boundary
+        l = self.PatchesInArea(*self.BoundingRectangle(rwy))
+        for p in l:
+            for t in p.trias:
+                vt = self.TriaVertices(t)
+                for i in range(3):
+                    if PointInPoly(vt[i], rwy):
+                        inner_vertices.add((t[i][0], t[i][1]))
+        allRWYvertices = verticesOnShoulder_A.union(verticesOnShoulder_B) #vertices on boundaris + inner vertices 
+        allRWYvertices.union(inner_vertices)
+        ##### TBD: alls include vertices on buttom and top line of RWY !!! ####################################
+        self._log_.info("ALL RWY VERTICES: {}.".format(allRWYvertices))
+        for p in l:
+            toberemoved = []
+            for t in p.trias:
+                self._log_.info("Checking if tria {} in RWY.".format(t))
+                if (t[0][0], t[0][1]) in allRWYvertices and (t[1][0], t[1][1]) in allRWYvertices and (t[2][0], t[2][1]) in allRWYvertices:
+                    toberemoved.append(t)
+            for t in toberemoved:
+                p.trias.remove(t) ### Remove all triangles of RWY
+                self._log_.info("    Removed RWY triangle {}.".format(t))
+            p.trias2cmds() #Update Commands accordingly
+        terrain_id = 0 #find terrain id for new patch that includes trias for runway
+        ##### TBD: Allow flexible defintion of terrain that should be used for runway, and add it if not already in current list
+        while terrain_id < len(self.DefTerrains) and self.DefTerrains[terrain_id] != "lib/g10/terrain10/coni_tmp_rain_sflat.ter":
+            self._log_.info("      Terrain id: {} named:{}.".format(terrain_id, self.DefTerrains[terrain_id]))
+            terrain_id += 1        
+        self._log_.info("TERRAIN ID FOUND IS: {} named:{}.".format(terrain_id, self.DefTerrains[terrain_id]))
+        ##for i in range(20):
+        ##    self._log_.info("PATCH id: {} with near:{} and far: {}".format(i, self.Patches[i].near, self.Patches[i].far))
+        rwyPatch = XPLNEpatch(1, 0.0, -1.0, rwyApv[0][0], terrain_id) ##use pool index of first rwyAborder vertex as
+        rwyPatch.cmds.append( [1, rwyApv[0][0] ] ) #selection of poolIndex has to be set always as first command ### TBD_ to be optimized that not twice set when created and again in cmds
+        for i in range(1, len(rwyApv)):
+            ################################ TBD: always check to insert in clockwise order !!!!!!!!! ################# TBD ########### TBD ###########
+            rwyPatch.trias.append([ rwyApv[i-1], rwyApv[i], rwyBpv[i-1] ])
+            rwyPatch.trias.append([ rwyBpv[i-1], rwyApv[i], rwyBpv[i] ])
+        rwyPatch.trias2cmds()
+        self._setPatchBoundary_(rwyPatch)
+        self.Patches.append(rwyPatch)
+        ### TBD1: When inserting Vertices into pools by functions above do it in new pools wiht adapted scaling to allow millimeter height.
+        ### TBD2: Adapht elevation of points using elevation given by spline interpolation (done perhaps outside this function)
+        ### TBD3: Allow definition of a new terrain like gras for airport
+        return verticesOnShoulder_A.union(verticesOnShoulder_B) ### TBD: return also vertices on buttom and top line of RWY
+
+    def cutRwyProfileInMeshOLD(self, rwy, interval=20): ###NEW###### but privious version to be removed ##########
+        rwyshoulderA = []
+        ### TBD: insert distances for existing vertices in shoulder A also in shoulder B and vice versa
+        ### TBD: Insert Vertices in dict/list in mesh at their coordinates
+        ### TBD: Insert Shoulder B + ends of RWY
+        ### TBD: Remove all Trias inside/building RWY
+        ### TBD2: Insert Trias between interval points using elevation given by spline interpolation
+        ### TBD2: When inserting Vertices into pools by functions above do it in new pools wiht adapted scaling to allow millimeter height.
+        #self._log_.info("*** Points sorted on RWY by distance: {}".format(sorted(dictShoulder_A.keys())))
+        rwyshoulderA = getPointsOnSegment (rwy[1], rwy[2], interval)
+        rwyshoulderB = getPointsOnSegment (rwy[0], rwy[3], interval)
+        border_vertices = set()
+        for i in range(len(rwyshoulderA) - 1):
+            #for v in self.cutEdges(rwyshoulderA[i], rwyshoulderB[i], accuracy):
+            #    border_vertices.add(v)
+            #for v in self.cutEdges(rwyshoulderB[i], rwyshoulderB[i+1], accuracy):
+            #    border_vertices.add(v)                
+            #for v in self.cutEdges(rwyshoulderB[i+1], rwyshoulderA[i], accuracy):
+            #    border_vertices.add(v)
+            #for v in self.cutEdges(rwyshoulderA[i], rwyshoulderA[i+1], accuracy):
+            #    border_vertices.add(v)
+            vlen = len(border_vertices)
+            for v in self.insertVertex(rwyshoulderA[i], accuracy):
+                border_vertices.add(v)
+                #self._log_.info("+++ Added coordinates      {}".format(self.V[v[0]][v[1]])) ####### JUST FOR CHECK ### TO BE REMOVED !! ###
+            self._log_.info("+++++ Vertex {} added into the mesh on RWY side A caused {} new verices:".format(rwyshoulderA[i], len(border_vertices) - vlen))
+            vlen = len(border_vertices)
+            for v in self.insertVertex(rwyshoulderB[i], accuracy):
+                border_vertices.add(v)
+            self._log_.info("+++++ Vertex {} added into the mesh on RWY side B caused {} new verices.".format(rwyshoulderA[i], len(border_vertices) - vlen))
+        #for v in self.cutEdges(rwyshoulderA[-1], rwyshoulderB[-1], accuracy):
+        #    border_vertices.add(v)
+        for v in self.insertVertex(rwyshoulderA[-1], accuracy):
+            border_vertices.add(v)
+        for v in self.insertVertex(rwyshoulderB[-1], accuracy):
+            border_vertices.add(v)        
+        inner_vertices = set()
+        l = self.PatchesInArea(*self.BoundingRectangle(rwy))
+        for p in l:
+            for t in p.trias:
+                vt = self.TriaVertices(t)
+                for i in range(3):
+                    if PointInPoly(vt[i], rwy):
+                        inner_vertices.add((t[i][0], t[i][1]))
+        self._log_.info("Cutting Runway done. Now there are {} vertices inside and at the border of the Polygon in the mesh.".format(len(border_vertices.union(inner_vertices))))
+        return border_vertices.union(inner_vertices)        
+        
 
             
     def getElevation(self, x, y, z = -32768): #gets Elevation at point (x,y) from raster grid Elevation
@@ -612,11 +1209,11 @@ class XPLNEDSF:
         return miny, maxy, minx, maxx
 
 
-    def TriaVertices(self, t): #returns 3 vertices of triangle as list of [lon, lat] pairs
+    def TriaVertices(self, t): #returns 3 vertices of triangle as list of [lon, lat] pairs  ############# TBD: CHECK WHERE NEEDED !!! ################
         return [  [self.V[t[0][0]][t[0][1]][0], self.V[t[0][0]][t[0][1]][1]], [self.V [t[1][0]] [t[1][1]][0], self.V[t[1][0]][t[1][1]][1]],  [self.V[t[2][0]][t[2][1]][0], self.V[t[2][0]][t[2][1]][1]] ]
 
     
-    def PatchesInArea (self, latS, latN, lonW, lonE):
+    def PatchesInArea (self, latS, latN, lonW, lonE):  #################### NEW UPDATE: Function uses now trias list of trias instead trias() build funciton  ### NEW #######################
     #
     # returns a list of all patches in dsf, where the rectangle bounding of the patch intersects
     # the rectangle area defined by coordinates
@@ -627,15 +1224,15 @@ class XPLNEDSF:
         l = [] # list of patch-ids intersecting area
         count = 0
         for p in self.Patches:
-            v = []
-            for t in p.triangles(): #all triangles in each patch
-                v.extend(self.TriaVertices(t)) #so all vertices of the patch
-            miny, maxy, minx, maxx = self.BoundingRectangle(v)
+            ## v = []    #### NEW: Not needed any more ###### NEW ###
+            ## for t in p.triangles(): #all triangles in each patch
+            ##    v.extend(self.TriaVertices(t)) #so all vertices of the patch
+            ## miny, maxy, minx, maxx = self.BoundingRectangle(v)
             if self._DEBUG_: self._log_.debug("Checking patch {} of {} which lies in SW ({}, {}) and NE ({}, {}).".format(count, len(self.Patches), miny, minx, maxy, maxx))
-            if not (minx < lonW and maxx < lonW): #x-range of box is not completeley West of area
-                if not (minx > lonE and maxx > lonE): #x-range of box is not completele East of area
-                    if not (miny < latS and maxy < latS): #y-range is not completele South of area
-                        if not (miny > latN and maxy > latN): #y-range is not conmpletele North of ares
+            if not (p.minx < lonW and p.maxx < lonW): #x-range of box is not completeley West of area      #### NEW ### use p.minx instead of minx - also below ##### NEW ###
+                if not (p.minx > lonE and p.maxx > lonE): #x-range of box is not completele East of area
+                    if not (p.miny < latS and p.maxy < latS): #y-range is not completele South of area
+                        if not (p.miny > latN and p.maxy > latN): #y-range is not conmpletele North of ares
                             l.append(p)  #so we have an intersection of box with area and append the patch index
                             if self._DEBUG_: self._log_.debug("Patch {} in SW ({}, {}) and NE ({}, {}) does intersect.".format(count, miny, minx, maxy, maxx))
             count += 1
@@ -643,7 +1240,7 @@ class XPLNEDSF:
         return l
            
                     
-    def read(self, file):   ###### NEXT STEP: Also read 7-ZIP FILES ###########
+    def read(self, file):  
         self.__init__("_keep_logger_","_keep_statusfunction_") #make sure all values are initialized again in case additional read
         if not os.path.isfile(file):
             self._log_.error("File does not exist!".format(file))
