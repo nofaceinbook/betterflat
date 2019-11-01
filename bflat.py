@@ -3,7 +3,7 @@
 #
 # bflat.py
 #        
-bflat_VERSION = "0.2.2"
+bflat_VERSION = "0.3.1 exp"
 # ---------------------------------------------------------
 # Python GUI module for flattening a X-Plane mesh at a given airport.
 #
@@ -30,6 +30,8 @@ from shutil import copy2
 from tkinter import *
 from tkinter.filedialog import askopenfilename
 from math import sin, cos, sqrt, atan2, radians
+from scipy import interpolate ############ TBD: mentioned to be installed and check if available; if not don't have Runway Profile function available
+import numpy #### actually just for transfering result of interpolate to scalar --> other method, or just import asscalar 
 
 
 def displayHelp(win):
@@ -38,12 +40,17 @@ def displayHelp(win):
           "This program flattens the mesh of X-Plane at an given airport.\n"
           "It finds all tringles that either intersect the airport boundary \n"
           "or the runways, both defined in an airport data file apt.dat.\n"
-          "and sets them all to a given height.\n\n"
+          "and sets them all to a given height.\n"
+          "In case you tick the option cut, the triangles will also be cut in new\n"
+          "ones that build up the boundary or runway.\n\n"
           "So first select the apt.dat including your airport. In case this apt.dat\n"
           "includes several airport you have to specify it with the identifier\n"
           "usually the 4 letter ICAO code.\n"
           "Next you have to specify and read the dsf-file including the mesh for the\n"
-          "area of the airport.\n" 
+          "area of the airport.\n"
+          "IMPORTANT: The dsf-file you need to update is either the default one\n"
+          "in X-Plane Global Scenery folder or if you installed mesh, like HD mesh\n"
+          "it will be located in the according folder for them mesh.\n"
           "Now you can write and later use the updated dsf-file. You can\n"
           "also directly specify a backup file of the original dsf-file.\n\n"
           "With the .kml-button you can generate a kml-file where you can\n"
@@ -99,7 +106,7 @@ def readAPT(filename, icao_id=""):
     # Each boundary is list of [lon, lat] values of vertices of the boundary
     # Hole definition in boundary are treated the same as a boundary!!!
     # For Bezier nodes of the boundary only the node without Bezier definitions is considered!!!
-    # Only land runways  (type 100) are returned in a list with sub-lists of their endpoints, width in meter
+    # Only land runways (type 100) are returned in a list with sub-lists of their endpoints, width in meter
     # Returned height is an integer in meter, also retruns flatten flag if set for the airport
     #
     log.info("Reading airport data from: {}".format(filename))
@@ -155,19 +162,6 @@ def readAPT(filename, icao_id=""):
         return bounds, runways, apt_elev, apt_flatten, apt_name, None
 
 
-def distance (p1, p2): #calculates distance between p1 and p2 in meteres where p is pair of longitude, latitude values
-    R = 6371009 #mean radius earth in m
-    lon1 = radians(p1[1]) ##acutally are lon and lat mixed here, but works like that
-    lat1 = radians(p1[0])
-    lon2 = radians(p2[1])
-    lat2 = radians(p2[0]) 
-    dlon = lon2 - lon1
-    dlat = lat2 - lat1
-    a = sin(dlat / 2)**2 + cos(lat1) * cos(lat2) * sin(dlon / 2)**2
-    c = 2 * atan2(sqrt(a), sqrt(1 - a))   
-    return R * c
-
-
 def getRunwayBounds (p1, p2, w):
     degree_dist_at_equator = 111120 #for longitude (or 111300?)
     lat_degree_dist_average = 111000
@@ -189,48 +183,38 @@ def getRunwayBounds (p1, p2, w):
     l.append([round(p1[1] + dx, 8), round(p1[0] + dy, 8)])
     l.append([round(p2[1] + dx, 8), round(p2[0] + dy, 8)])
     l.append([round(p2[1] - dx, 8), round(p2[0] - dy, 8)])
-    l.append(l[0]) #add firs corner to form closed loop
+    l.append(l[0]) #add first corner to form closed loop
     return l
+ 
+def interpolateRWYprofile(rwys, dsf): #calculates the interpolated rwy profiles         ############### NEW2 ###################
+    rwy = rwys[0] ###### TBD: for the beginning just profile for one rwy
+    start = (rwy[0][1], rwy[0][0]) #start coordinates rwy
+    end = (rwy[1][1], rwy[1][0]) #end coordinates rwy
+    l = distance(start, end) #length of runway
+    loginfo = []##### JUST FOR TESTING STRING WITH RETURNED LOG INFO
+    x_points = []
+    y_points = []
+    for d in range(-100, int(l)+101, 100): #starting before and ending after rwy #### TBD: variable width for definition points
+        p = (start[0] + d/l * (end[0] - start[0]), start[1] + d/l * (end[1] - start[1]))
+        x_points.append(d)
+        y_points.append(dsf.getElevation(p[0], p[1]))
+        loginfo.append("At distance {} with coords {} elevation is: {}".format(d, p, y_points[-1] ))
+    rwySpline = interpolate.splrep(x_points, y_points, s=12) ######### TBD: smooth factor just fixed test value, has to be variable !!!! ###########
+    return rwySpline, loginfo
 
-
-def _linsolve_(a1, b1, c1, a2, b2, c2):
-    divisor = (a1 * b2) - (a2 * b1)
-    if divisor == 0:
-        return (-99999, -99999)  # actually None but with negative values calling intersection function returns None
-    return (round(((c1 * b2) - (c2 * b1)) / divisor, 8),
-            round(((a1 * c2) - (a2 * c1)) / divisor, 8))  # ROUNDING TO ALWAYS GET SAME CONCLUSION
-
-
-def intersection(p1, p2, p3, p4):  # checks if segment from p1 to p2 intersects segement from p3 to p4
-    s0, t0 = _linsolve_(p2[0] - p1[0], p3[0] - p4[0], p3[0] - p1[0], p2[1] - p1[1], p3[1] - p4[1], p3[1] - p1[1])
-    if s0 >= 0 and s0 <= 1 and t0 >= 0 and t0 <= 1:
-        return (round((p1[0] + s0 * (p2[0] - p1[0])), 8), round(p1[1] + s0 * (p1[1] - p1[1]), 8))  ### returns the cutting point as tuple; ROUNDING TO ALWAYS GET SAME POINT
-    else:
-        return (None)
-
-
-def PointInPoly(p, poly):  # test wether a point p with [lat, lon] coordinates lies in polygon (list of [lat, lon] pairs
-    # counts number of intersections from point outside poly to p on same y-coordinate, if it is odd the point lies in poly
-    # to avoid intersection at vertex of poly on same y-coordinate, such points are shifte about 1mm above for testing intersection
-    count = 0
-    for i in range(len(poly) - 1):  # for all segments in poly
-        epsilon0, epsilon1 = (0, 0)  # added to p's y coordinate in case p is on same y-coordinate than according vertex of segment
-        if poly[i][1] < p[1] and poly[i + 1][1] < p[1]:  # if vertices of segment below y-coordinate of p, no intersection
-            continue
-        if poly[i][1] > p[1] and poly[i + 1][1] > p[1]:  # if vertices of segment above y-coordinate of p, no intersection
-            continue
-        if poly[i][1] == p[1]:
-            epsilon0 = 0.00000001
-        if poly[i + 1][1] == p[1]:
-            epsilon1 = 0.00000001
-        x = intersection([poly[i][0], poly[i][1] + epsilon0], [poly[i + 1][0], poly[i + 1][1] + epsilon1], [181, p[1]], p)
-        if x:
-            count += 1
-    if count % 2:
-        return True  # odd number of intersections, so p in poly
-    else:
-        return False  # even number of intersection, so p outside poly
-
+def interpolatedRWYelevation(rwys, p, rwySpline): #based on runway it's spline profile, the elevation of a point on the runway is calculated    ############# NEW2 ###########
+    rwy = rwys[0] ###### TBD: for the beginning just profile for one rwy
+    start = (rwy[0][1], rwy[0][0]) #start coordinates rwy
+    end = (rwy[1][1], rwy[1][0]) #end coordinates rwy
+    startD = (start[0] - 0.1 * (end[0] - start[0]), start[1] - 0.1 * (end[1] - start[1])) #use starting point 10% of rwy length before to really get value for all points around runway
+    endD = (start[0] + 1.1 * (end[0] - start[0]), start[1] + 1.1 * (end[1] - start[1]))   #use end point 10% of rwy length behind to really get value for all points around runway
+    inclination_of_ortho = (end[1] - start[1], start[0] - end[0])
+    orthoStartD = (p[0] - inclination_of_ortho[0], p[1] - inclination_of_ortho[1]) # Start of orthogonal line of RWY through point p with length double of RWY (to guarentee intersection on center line)
+    orthoEndD = (p[0] + inclination_of_ortho[0], p[1] + inclination_of_ortho[1]) # End of orthogonal line of RWY through point p with length double of RWY (to guarentee intersection on center line)
+    p_centered = intersection(startD, endD, orthoStartD, orthoEndD) #location of p on center line
+    d = distance(start, p_centered)
+    elev = interpolate.splev(d, rwySpline)  ### to be done: error checking
+    return numpy.asscalar(elev)
 
 def vertices_of_boundary_intersecting_trias(dsf, poly):
     #
@@ -273,6 +257,23 @@ def vertices_of_boundary_intersecting_trias(dsf, poly):
     log.info("References to vertices to be changed: {}".format(s))
     log.info("Unique coords to be changed: {}".format(changedVertices))
     return s, changedVertices
+
+def getAllVerticesForCoords(dsf, s):  ########### TBD: Call this function from function above
+    ### For all vertices in set s that need to be changed (e.g. new elevation), the lon/lat coordinates are taken and all other vertices on these coordinates are determined and returned
+    changedVertices = {}  # set up dictonary with all coords of changed vertices to find additional vertices at such coords for trias out of bound
+    for v in s:
+        changedVertices[(round(dsf.V[v[0]][v[1]][0], 7), round(dsf.V[v[0]][v[1]][1], 7))] = True  # coords round to range of cm
+    miny, maxy, minx, maxx = dsf.BoundingRectangle(changedVertices)
+    delta = 0.000001  # check also for vertices 0.1m outside boundary
+    for p in dsf.PatchesInArea(miny - delta, maxy + delta, minx - delta, maxx + delta):
+        for t in p.triangles():
+            for v in t:
+                if (round(dsf.V[v[0]][v[1]][0], 7), round(dsf.V[v[0]][v[1]][1], 7)) in changedVertices:
+                    s.add((v[0], v[1]))  # add tuple of vertex at coords to make sure to get all vertices at the coords
+    log.info("References to vertices to be changed: {}".format(s))
+    log.info("Unique coords to be changed: {}".format(changedVertices))
+    return s, changedVertices    #returns set of all vertices and coordinates and the coordinates
+
 
 
 def averageheight(dsf, vertices):
@@ -328,6 +329,10 @@ class bflatGUI:
         self.boundtype_radioR = Radiobutton(self.window, text="Runways", variable=self.boundtype, value="runways")
         self.boundtype_radioR.grid(row=3, column=2)
         self.boundtype_radioA.select()
+        self.cuttype = IntVar() # 1 if mesh should be cut, 0 if just elevation of underlaying trias should be adapted
+        self.cuttype_checkB = Checkbutton(self.window, text="cut", variable=self.cuttype)
+        self.cuttype_checkB.grid(row=3, column=3)
+        self.cuttype_checkB.select()
         
         self.apt_read = Button(self.window, text='Read Boundary', command=lambda: self.read_apt(self.apt_entry.get(), self.aptid_entry.get()))
         self.apt_read.grid(row=4, column=0, sticky=E, pady=4)
@@ -497,9 +502,26 @@ class bflatGUI:
             for boundary in bounds:  # get intersections for all boundaries
                 self.result_label.config(text="Calculate intersections for boundary. Wait....")
                 self.window.update()
-                vs, cs = vertices_of_boundary_intersecting_trias(self.dsf, boundary)
-                self.vertices = self.vertices.union(vs)
-                coords.update(cs)
+                if self.cuttype.get():
+                    
+                    #self.vertices = self.dsf.cutPolyInMesh(boundary, 5) #### TBD: allow to set accuracy in GUI, for now set to 5m
+                    self.vertices = self.vertices.union(self.dsf.cutRwyProfileInMesh(boundary, 20)) ##### NEW2 ################# WARNING just to test next step of RWY profiles !!!!!! ####################
+                    vs, cs = getAllVerticesForCoords(self.dsf, self.vertices)
+                    ########## ATTENTION: self.vertices is not updated here with vs as it should with: self.vertices = self.vertices.union(vs) ######### ATTENTION ############
+                    coords.update(cs)
+                    rwySpline, loginfo = interpolateRWYprofile(self.runways, self.dsf) ### NEW2 ###########  ##### NOT SURE IF RIGHT PLACE HERE ########
+                    for info in loginfo: log.info(info) ### NEW2 ###########  ##### NOT SURE IF RIGHT PLACE HERE ########
+                    for v in self.vertices: ### NEW2 ###########  ##### NOT SURE IF RIGHT PLACE HERE ########
+                        newelev = interpolatedRWYelevation(self.runways, (self.dsf.V[v[0]][v[1]][0], self.dsf.V[v[0]][v[1]][1]), rwySpline)
+                        newelev = round(newelev)
+                        dist = distance((self.dsf.V[v[0]][v[1]][0], self.dsf.V[v[0]][v[1]][1]), (self.runways[0][0][1], self.runways[0][0][0])) #### JUST FOR TEST, works just for first RWY !!!!!
+                        dist = round(dist)
+                        log.info("Vertex {} with coordinates {} at approx distance {}m set to elevation {}m.".format(v, (self.dsf.V[v[0]][v[1]][0], self.dsf.V[v[0]][v[1]][1]), dist, newelev))
+                        self.dsf.V[v[0]][v[1]][2] = int(newelev)
+                else:
+                    vs, cs = vertices_of_boundary_intersecting_trias(self.dsf, boundary)
+                    self.vertices = self.vertices.union(vs)
+                    coords.update(cs)
             ah = averageheight(self.dsf, self.vertices)
             if ah == None:
                 self.result_label.config(text="No mesh intersection found. Check that files are correct.")
@@ -542,10 +564,11 @@ class bflatGUI:
                 self.current_action = None
                 return
         log.info("Writing dsf file: {} for height: {}".format(dsffile, newheight))
-        for v in self.vertices:
-            log.debug(" {} with height {} changed to: ".format(self.dsf.V[v[0]][v[1]], self.dsf.getElevation(self.dsf.V[v[0]][v[1]][0], self.dsf.V[v[0]][v[1]][1], self.dsf.V[v[0]][v[1]][2]), newheight))
-            self.dsf.V[v[0]][v[1]][2] = newheight
-        self.write_status_label.config(text="Wrtiting changes ...") 
+        ###################### TBD: This code below has to be enabled again, JUST FOR TESTING PROFILE !!!! #################################
+        ##########for v in self.vertices:
+            #########log.debug(" {} with height {} changed to: {}".format(self.dsf.V[v[0]][v[1]], self.dsf.getElevation(self.dsf.V[v[0]][v[1]][0], self.dsf.V[v[0]][v[1]][1], self.dsf.V[v[0]][v[1]][2]), newheight))
+            #########self.dsf.V[v[0]][v[1]][2] = newheight 
+        self.write_status_label.config(text="Writing changes ...") 
         self.window.update()
         self.dsf.write(dsffile)
         self.write_status_label.config(text="Done.")
