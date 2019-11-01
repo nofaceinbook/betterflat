@@ -3,7 +3,7 @@
 #
 # bflatKMLexport.py
 #        
-bflatKMLexport_VERSION = "0.2.2"
+bflatKMLexport_VERSION = "0.3.1"
 # ---------------------------------------------------------
 # Python module for exporting mesh area to be flattened to KML-file.
 # This module is called by bflat.py (Tool for flattening X-Plane Mesh)
@@ -71,7 +71,25 @@ def kmlExport(dsf, boundaries, vertices, filename):
                     style = "FLAT" #if all vertices of current triangle are in vertices where height is adapted, then triangle is flattened
                 else:
                     style = saved_style #set back to original style
-                f.write("    <Placemark><name>Tria {}</name><styleUrl>#{}</styleUrl><Polygon><outerBoundaryIs><LinearRing><coordinates>\n".format(tcount, style))
+                upcoords = "{} - ".format(t)  ########### Following NEW /EXPERIMENTAL to get upper coordinates shown in Google Earth
+                upi = 5
+                while upi < len(dsf.V[t[0][0]][t[0][1]]):
+                    upxa = ", {0:.6f}".format(dsf.V[t[0][0]][t[0][1]][upi])
+                    upcoords += upxa
+                    upi += 1
+                upi = 5
+                upcoords += "/"
+                while upi < len(dsf.V[t[1][0]][t[1][1]]):
+                    upxa = ", {0:.6f}".format(dsf.V[t[1][0]][t[1][1]][upi])
+                    upcoords += upxa
+                    upi += 1
+                upi = 5
+                upcoords += "/"
+                while upi < len(dsf.V[t[2][0]][t[2][1]]):
+                    upxa = ", {0:.6f}".format(dsf.V[t[2][0]][t[2][1]][upi])
+                    upcoords += upxa
+                    upi += 1                    
+                f.write("    <Placemark><name>T{} {}</name><styleUrl>#{}</styleUrl><Polygon><outerBoundaryIs><LinearRing><coordinates>\n".format(tcount, upcoords, style))  ##upcords NEW/Experimental
                 v = dsf.TriaVertices(t)
                 h = [] #stores heigth of vertices in triangles
                 h.append(int(dsf.getElevation(v[0][0], v[0][1], dsf.V[t[0][0]][t[0][1]][2])))  #3rd Value is height from Vertex to be consideredn in case differnet from -32xxx
