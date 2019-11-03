@@ -31,7 +31,8 @@ from tkinter import *
 from tkinter.filedialog import askopenfilename
 from math import sin, cos, sqrt, atan2, radians
 from scipy import interpolate ############ TBD: mentioned to be installed and check if available; if not don't have Runway Profile function available
-import numpy #### actually just for transfering result of interpolate to scalar --> other method, or just import asscalar 
+import numpy #### actually just for transfering result of interpolate to scalar --> other method, or just import asscalar
+import copy #### needed for deepcopy --> perhaps copy values individually
 
 
 def displayHelp(win):
@@ -215,6 +216,91 @@ def interpolatedRWYelevation(rwys, p, rwySpline): #based on runway it's spline p
     d = distance(start, p_centered)
     elev = interpolate.splev(d, rwySpline)  ### to be done: error checking
     return numpy.asscalar(elev)
+
+#def moveSubmPools(dsf, V):
+    #moves vertices V to other Pools allowing submeter elevation
+    ### TBD: insert new vertices directly in SubmPools and check here first if they are already in such a pool
+    ###### TBD: remove all not required vertices from old pools but this requires check in complete dsf
+    logdata = [] #for testing info returned for logfile
+    smp = {} #dictionary containing the new poolIDs for different size of planes
+    newV = {} #dictionary mapping old vertices in V to the ones in the new submPool
+    #for v in V:
+    #    planes = len(dsf.V[v[0]][v[1]]) #number of planes v has
+    #    if planes not in smp:
+    #        dsf.V.append(dsf.V[v[0]][v[1]])
+    #        smp[planes] = len(dsf.V) - 1 #this is now new poolID for submeter Vertices with len() planes
+    #        dsf.Scalings.append(dsf.Scalings[v[0]]) #use Scaling for v in old Pool as base for new Pool
+    #        dsf.Scalings[-1][2] = [3276.75, 0] #set scaling for elevation from 0m to about 3.200m with 5cm steps (65535*0.05=3276.75)
+    #        ##### TBD: allow flexible scaling dependent of elevation of v, including negative values and above 4.000
+    #        newV[(v[0], v[1])] = (len(dsf.V) - 1, len(dsf.V[poolID]) - 1)
+    #        logdata.append("New Pool with ID {} and Scaling with values: {}".format(len(dsf.V) - 1, dsf.Scalings[-1]))
+    #    else:
+    #        poolID = smp[planes]
+    #        for i in range(planes):
+    #            if i != 2: #not checking elevation plane as this will be new
+    #                if dsf.Scalings[poolID][i][0] != dsf.Scalings[v[0]][i][0] or dsf.Scalings[poolID][i][1] != dsf.Scalings[v[0]][i][1]:
+    #                    logdata.append("ERROR: New Scaling does not fit for vertex {} and it's scaling: {}".format(v, dsf.Scalings[v[0]]))
+    #                    ### TBD: Handle error in future by inserting new SubmPools for that new Scalin
+    #        dsf.V[poolID].append(dsf.V[v[0]][v[1]])
+    #        newV[(v[0], v[1])] = (poolID, len(dsf.V[poolID]) - 1)
+    #for p in dsf.PatchesInArea(*dsf.BoundingRectangle(V)): #now update all trias in area of V with reference to new Pools
+    #    for t in p.trias:
+    #        for i in range(3):
+    #            if (t[i][0], t[i][1]) in newV:
+    #                t[i] = newV[(t[i][0], t[i][1])]
+    #    p.trias2cmds()
+    #for i in range(len(V)):
+    #    logdata.append("Move vertex {} to {}.".format(V[i], newV[(V[i][0], V[i][1])]))
+    #    V[i] = newV[(V[i][0], V[i][1])]
+    #return V, logdata #list of vertices with updated poolIDs is returned
+
+
+def moveSubmPools(dsf, V):
+    #moves vertices V to other Pools allowing submeter elevation
+    ### TBD: insert new vertices directly in SubmPools and check here first if they are already in such a pool
+    ###### TBD: remove all not required vertices from old pools but this requires check in complete dsf
+    logdata = [] #for testing info returned for logfile
+    smp = {} #dictionary containing the new poolIDs for different size of planes
+    newV = {} #dictionary mapping old vertices in V to the ones in the new submPool
+    Vcoords = [] #list of lon,lat coordinates of all vertices in V
+    for v in V:
+        planes = len(dsf.V[v[0]][v[1]]) #number of planes v has
+        if planes not in smp:
+            dsf.V.append([]) #create a new Pool
+            dsf.V[-1].append(copy.deepcopy(dsf.V[v[0]][v[1]])) #insert v in Pool  ################# OPEN: Copy individual values that deepcopy would not be required, also below
+            smp[planes] = len(dsf.V) - 1 #this is now new poolID for submeter Vertices with len() planes
+            dsf.Scalings.append(copy.deepcopy(dsf.Scalings[v[0]])) #use Scaling for v in old Pool as base for new Pool
+            dsf.Scalings[-1][2] = [3276.75, 0] #set scaling for elevation from 0m to about 3.200m with 5cm steps (65535*0.05=3276.75)
+            ##### TBD: allow flexible scaling dependent of elevation of v, including negative values and above 4.000m
+            newV[(v[0], v[1])] = (len(dsf.V) - 1, 0) #is first vertex inPool   ?????? indexing really starts with  0 ????????
+            logdata.append("New Pool with ID {} and Scaling with values: {}".format(len(dsf.V) - 1, dsf.Scalings[-1]))
+            logdata.append("     Scaling taken from Pool ID {} with values: {}".format(v[0], dsf.Scalings[v[0]]))
+        else:
+            poolID = smp[planes]
+            for i in range(planes):
+                if i != 2: #not checking elevation plane as this will be new
+                    if dsf.Scalings[poolID][i][0] != dsf.Scalings[v[0]][i][0] or dsf.Scalings[poolID][i][1] != dsf.Scalings[v[0]][i][1]:
+                        logdata.append("ERROR: New Scaling does not fit for vertex {} and it's scaling: {}".format(v, dsf.Scalings[v[0]]))
+                        ### TBD: Handle error in future by inserting new SubmPools for that new Scaling
+            dsf.V[poolID].append(copy.deepcopy(dsf.V[v[0]][v[1]]))
+            newV[(v[0], v[1])] = (poolID, len(dsf.V[poolID]) - 1)
+        Vcoords.append((dsf.V[v[0]][v[1]][0], dsf.V[v[0]][v[1]][1]))
+    for p in dsf.PatchesInArea(*dsf.BoundingRectangle(Vcoords)): #now update all trias in area of V with reference to new Pools
+        x = False ###JUST FOR TESTING
+        logdata.append("Changing trias in patch....") ##JUST FOR TESTING##JUST FOR TESTING##JUST FOR TESTING
+        for t in p.trias:
+            for i in range(3):
+                if (t[i][0], t[i][1]) in V:
+                    t[i] = newV[(t[i][0], t[i][1])]
+                    x = True ### JUST FOR TESTING
+        p.trias2cmds()
+        if x: logdata.append("Updated CMDS for Patach {}: {}".format(dsf.Patches.index(p), p.cmds)) ### JUST FOR TESTING
+    V2 = set()
+    for v in V:
+        logdata.append("Move vertex {} to {}.".format(v, newV[(v[0], v[1])]))
+        V2.add (newV[(v[0], v[1])])
+    return V2, logdata #list of vertices with updated poolIDs is returned
+
 
 def vertices_of_boundary_intersecting_trias(dsf, poly):
     #
@@ -513,11 +599,18 @@ class bflatGUI:
                     for info in loginfo: log.info(info) ### NEW2 ###########  ##### NOT SURE IF RIGHT PLACE HERE ########
                     for v in self.vertices: ### NEW2 ###########  ##### NOT SURE IF RIGHT PLACE HERE ########
                         newelev = interpolatedRWYelevation(self.runways, (self.dsf.V[v[0]][v[1]][0], self.dsf.V[v[0]][v[1]][1]), rwySpline)
-                        newelev = round(newelev)
+                        newelev = round(newelev, 3)
                         dist = distance((self.dsf.V[v[0]][v[1]][0], self.dsf.V[v[0]][v[1]][1]), (self.runways[0][0][1], self.runways[0][0][0])) #### JUST FOR TEST, works just for first RWY !!!!!
                         dist = round(dist)
                         log.info("Vertex {} with coordinates {} at approx distance {}m set to elevation {}m.".format(v, (self.dsf.V[v[0]][v[1]][0], self.dsf.V[v[0]][v[1]][1]), dist, newelev))
-                        self.dsf.V[v[0]][v[1]][2] = int(newelev)
+                        self.dsf.V[v[0]][v[1]][2] = newelev
+                    for v in self.vertices:
+                        log.info("Old vertex {} is: {}".format(v, self.dsf.V[v[0]][v[1]]))
+                    self.vertices, logdata = moveSubmPools(self.dsf, self.vertices)
+                    for data in logdata:
+                        log.info(data)
+                    for v in self.vertices:
+                        log.info("New vertex {} is: {}".format(v, self.dsf.V[v[0]][v[1]]))
                 else:
                     vs, cs = vertices_of_boundary_intersecting_trias(self.dsf, boundary)
                     self.vertices = self.vertices.union(vs)
