@@ -1,6 +1,6 @@
 #******************************************************************************
 #
-# xplnedsf.py        Version 0.3.1
+# xplnedsf.py        Version 0.3.2
 # ---------------------------------------------------------
 # Python module for reading and writing X_Plane DSF files.
 #
@@ -122,6 +122,7 @@ def intersection(p1, p2, p3, p4):  # checks if segment from p1 to p2 intersects 
     else:                                                         ### ERROR CORRECTION: p2[1] - p1[1] instead of p1[1] - p1[1] above    ### for bflat ############## NEW #############
         return (None)
 
+         
 
 class XPLNEpatch:
     def __init__(self, flag, near, far, poolIndex, defIndex):
@@ -237,7 +238,80 @@ class XPLNEDSF:
         self.DefPolygons = {}  #dictionary containing for each index number (0 to n-1) the name of Polygon definition file
         self.DefNetworks = {}  #dictionary containing for each index number (0 to n-1) the name of Network definition file; actually just one file per dsf-file
         self.DefRasters = {}   #dictionary containing for each index number (0 to n-1) the name of Raster definition (for the moment assuing "elevaiton" is first with index 0)
+        self.submP = set() #set with indices of vertex pools that allow submeter elevation; not given by dsf file but checked when submeter vertices should be added   ########## NEW3 #############
         self._log_.info("Class XPLNEDSF initialized.")
+
+    def checkTriasOutOfRange(self): #Checks if index in tria to Vertex is out of range   ############## NEW 3: ERROR CHECK - MIGHT BE REMOVED LATER ##############
+        self._log_.info("*** CHECKING IF POOL INDICES IN TRIAS ARE OUT OF RANGE ***")
+        for p in self.Patches:
+            for t in p.trias:
+                for v in t:
+                    if v[1] > len(self.V[v[0]]):  
+                        self._log_.warning("Index to Pool {} is higher {} than number of elements {}.".format(v[0], v[1], len(self.V[v[0]])))       
+
+    def trianglesCheck(self): #Checks if index in trias to Vertex is out of range   ############## NEW 3: ERROR CHECK - MIGHT BE REMOVED LATER ##############
+        self._log_.info("*** NEW +++ CHECKING IF POOL INDICES IN TRIAS ARE OUT OF RANGE ***")
+        def checktria(t, cmdid, patchid="(not defined yet)"):
+            for v in t:
+                if v[1] > len(self.V[v[0]]):  
+                    self._log_.warning("Index to Pool {} is higher {} than number of elements {} in CMDID {} within Patch ID {}.".format(v[0], v[1], len(self.V[v[0]]), cmdid, patchid))               
+        for pid in range(len(self.Patches)):
+            patch = self.Patches[pid]
+            l = []
+            p = None #current pool needs to be defined with first command
+            for c in patch.cmds:
+                if c[0] == 1: # Pool index changed within patch, so change
+                    p = c[1]
+                elif c[0] == 23: # PATCH TRIANGLE
+                    for v in range (1, len(c), 3): #skip value (command id)
+                        l.append( [ [p, c[v]], [p, c[v + 1]], [p, c[v + 2]] ])
+                        checktria(l[-1], 23, pid)
+                elif c[0] == 24: # PATCH TRIANGLE CROSS POOL
+                    for v in range (1, len(c), 6): #skip value (command id)
+                        l.append( [ [c[v], c[v+1]], [c[v+2], c[v+3]], [c[v+4], c[v+5]] ] )
+                        checktria(l[-1], 24)
+                elif c[0] == 25: # PATCH TRIANGLE RANGE 
+                    for v in range(c[1], c[2] - 1, 3): #last index has one added 
+                        l.append( [ [p, v], [p, v + 1], [p, v + 2] ] )
+                        checktria(l[-1], 25)
+                elif c[0] == 26: # PATCH TRIANGLE STRIP
+                    for v in range (3, len(c)): #skip first three values - including command id are not needed any more
+                        if v % 2: ##### NEW: Strip 1,2,3,4,5 refers to triangles 1,2,3 2,4,3 3,4,5 ############# NEW ########### ERROR CORRECTION ########## NEW ####
+                            l.append( [ [p, c[v-2]], [p, c[v-1]], [p, c[v]] ] )  ## NEW ##
+                            checktria(l[-1], 261, pid)
+                        else:                                                    ## NEW ##
+                            l.append( [ [p, c[v-2]], [p, c[v]], [p, c[v-1]] ] )  ## NEW ##
+                            checktria(l[-1], 262, pid)
+                elif c[0] == 27: # PATCH TRIANGLE STRIP CROSS POOL             
+                    for v in range (6, len(c), 2): #skip first values - including command id are not needed any more
+                        if v % 4: ##### NEW: Strip 1,2,3,4,5 refers to triangles 1,2,3 2,4,3 3,4,5 ############# NEW ########### ERROR CORRECTION ########## NEW ####
+                            l.append( [ [c[v-5], c[v-4]], [c[v-3], c[v-2]], [c[v-1], c[v]] ] )  ## NEW ##
+                            checktria(l[-1], 271)
+                        else:                                                                   ## NEW ##
+                            l.append( [ [c[v-5], c[v-4]], [c[v-1], c[v]], [c[v-3], c[v-2]] ] )  ## NEW ##
+                            checktria(l[-1], 272)
+                elif c[0] == 28:  # PATCH TRIANGLE STRIP RANGE
+                    for v in range(c[1], c[2] - 2): # last index has one added so -2 as we go 2 up and last in range is not counted
+                        if (v - c[1]) % 2:  ##### NEW: Strip 1,2,3,4,5 refers to triangles 1,2,3 2,4,3 3,4,5 ############# NEW ########### ERROR CORRECTION ########## NEW ####
+                            l.append( [ [p, v], [p, v + 2], [p, v + 1] ] ) ## NEW ##
+                            checktria(l[-1], 281)
+                        else:                                              ## NEW ##
+                            l.append( [ [p, v], [p, v + 1], [p, v + 2] ] ) ## NEW ##
+                            checktria(l[-1], 282)
+                elif c[0] == 29: # PATCH TRIANGLE FAN                          ##(all FAN commands not yet tested!!!!!!!!)##
+                    for v in range (3, len(c)): #skip first three values - including command id are not needed any more
+                        l.append( [ [p, c[1]], [p, c[v-1]], [p, c[v]] ] ) #at c[1] is the center point id of the fan
+                        checktria(l[-1], 29)
+                elif c[0] == 30: # PATCH TRIANGLE FAN CROSS POOL
+                    for v in range (6, len(c), 2): #skip first values - including command id are not needed any more
+                        l.append( [ [c[1], c[2]], [c[v-3], c[v-2]], [c[v-1], c[v]] ] ) #at c[1] is the pool index for fan center and at c[2] the point id
+                        checktria(l[-1], 30)
+                elif c[0] == 31:  # PATCH FAN RANGE
+                    for v in range(c[1], c[2] - 2): # at c[1] center point; last index has one added so -2 as we go 2 up and last in range is not counted
+                        l.append( [ [p, c[1]], [p, v + 1], [p, v + 2] ] )
+                        checktria(l[-1], 31)
+        return 0
+              
 
     def _setLogger_(self, logname):
         if logname == '__XPLNEDSF__': #define default logger if nothing is set
@@ -647,6 +721,8 @@ class XPLNEDSF:
         for p in self.Patches: #add to each patch its trias as list and the rectangle boundary coordinates of patch   ########### NEW ############# NEW #####
             p.trias = p.triangles()   ##NEW##
             self._setPatchBoundary_(p) ##NEW##
+        #self.checkTriasOutOfRange() ################## NEW 3 ###########  CHECK TO BE REMOVED ################################
+        self.trianglesCheck() ################## NEW 3 ###########  CHECK TO BE REMOVED ################################
         self._log_.info("{} patches extracted from commands.".format(len(self.Patches)))
         self._log_.info("{} different Polygon types including there definitions extracted from commands.".format(len(self.Polygons)))
         self._log_.info("{} different Objects with placements coordinates extracted from commands.".format(len(self.Objects)))
@@ -727,9 +803,9 @@ class XPLNEDSF:
             if defIndex != d.defIndex:
                 enccmds.extend(encCMD([3, d.defIndex])) #definition set according to current definition id; function will handle if id > 255
                 defIndex = d.defIndex
-            if poolIndex != d.cmds[0][1]: #Pool-Index is defined by first command and required to be defined directly before new Patch is defined!
-                enccmds.extend(encCMD([1, d.cmds[0][1]]))
-                poolIndex = d.cmds[0][1]
+            #if poolIndex != d.cmds[0][1]: #Pool-Index is defined by first command and required to be defined directly before new Patch is defined!    #### NEW3 ERROR TEST ###
+            enccmds.extend(encCMD([1, d.cmds[0][1]])) ####### NEW3 ERROR TEST: ALWAYS WRITE COMMAND ID #########   ##### CHECK IF CHANGED AGAIN ####
+            poolIndex = d.cmds[0][1] #### NEW3 #################################################################   ##### CHECK IF CHANGED AGAIN ####
             if nearLOD == d.near and farLOD == d.far:
                 if flag_physical == d.flag:
                     enccmds.extend(encCMD([16]))
@@ -787,7 +863,7 @@ class XPLNEDSF:
     def _packAtoms_(self): #starts all functions to write all variables to strings (for later been written to file)
         self._log_.info("Preparing data to be written to file.")
         self._log_.info("This version only applies changes to POOL, CMDS and SCAL atoms (all other atoms inc. SC32 are written as read)!")
-        self._scaleV_(16, True) #de-scale again 
+        self._scaleV_(16, True) #de-scale again
         self._encodePools_()
         self._packAllScalings_()
         self._packCMDS_()
@@ -796,6 +872,12 @@ class XPLNEDSF:
     def _setPatchBoundary_(self, p): #sets min/max values of patch p          ################ NEW #############
         for t in p.trias:
             for v in t: #all vertexes of each triangle in patch
+                if v[1] < 0: ############## NEW 3: ERROR CHECK - TO BE REMOVED LATER ##############
+                    self._log_.warning("Index to Pool {} is negative: {}".format(v[0], v[1]))
+                    return 1
+                if v[1] > len(self.V[v[0]]):  ############## NEW 3: ERROR CHECK - TO BE REMOVED LATER ##############
+                    self._log_.warning("Index to Pool {} is higher {} than number of elements {}.".format(v[0], v[1], len(self.V[v[0]])))
+                    return 1
                 if self.V[v[0]][v[1]][0] < p.minx:
                     p.minx = self.V[v[0]][v[1]][0]
                 if self.V[v[0]][v[1]][0] > p.maxx:
@@ -808,7 +890,7 @@ class XPLNEDSF:
         return 0
                                           
     
-    def _addVertexToPool_(self, v, t, p): #adds Vertex v = [lon, lat] inside tria t to Pool p ################# NEW ############
+    def _addVertexToPool_(self, v, t, p): #adds Vertex v = [lon, lat] inside tria t to Pool p ################# NEW ############  
         if self.V[t[0][0]][t[0][1]][2] > -32768 and self.V[t[1][0]][t[1][1]][2] > -32768 and self.V[t[2][0]][t[2][1]][2] > -32768:
             #all vertices have height directly assigned, probably no raster excistent, so also height for new vertex has to be calculated
             l0, l1 = PointLocationInTria(v, self.TriaVertices(t)) # returns length for vectors from point t3 with l0*(t2-t0) and l1*(t2-t1)
@@ -822,11 +904,53 @@ class XPLNEDSF:
             v_new.append(self.V[t[2][0]][t[2][1]][i] + l0 * (self.V[t[0][0]][t[0][1]][i] - self.V[t[2][0]][t[2][1]][i])  + l1 * (self.V[t[1][0]][t[1][1]][i] - self.V[t[2][0]][t[2][1]][i]) )
         self.V[p].append(v_new) #append vertex to pool p
         #### TBD: Make sure Pool Index for pool p does not exceed/reach 2^16 --> Could be handled when pools are converted to binary #### TBD ###
+        
+ 
+    def _addSubmVertex_(self, v, scalbase, elevscal=0.05): #adds vertex v to a pool allowing submeter elevation at minimum for required elevation scaling, and scalbase for all other scalings    #### NEW3 #########
+        ############## TBD:DEEPCOPY HERE in fucntion below FOR v AMD SCALBASE instead in calling funciton ############
+        if len(self.submP) == 0: #no submeter Pool in the set, then search first all pools to find some   
+            self._log_.info("Checking file for existing submeter pools....")
+            for i in range(len(self.Scalings)): # go through all pools and check if submeter and if add to submP
+                if len(self.Scalings[i]) >= 5: #only vertex pools with elevationa and normal vectors are relevant
+                    if self.Scalings[i][2][0] < 65535:  #scaling is x/65535, if x is less then 65535 we have submeter scaling
+                        self.submP.add(i)
+                        self._log_.info("File already has submeter pool with index {} and offset {}m and scaling {}m.".format(i, self.Scalings[i][2][1], self.Scalings[i][2][0]/65535))
+        poolID4v = None #find pool with ID where v could be inserted
+        self._log_.info("Checking if vertex {} with elevation scaling {}m and base scale {} fits to existing pool.".format(v, elevscal, scalbase))
+        for i in self.submP:
+            if len(scalbase) == len(self.Scalings[i]): #does size of scaling vector / number of planes for pool fit
+                counter = 0
+                for j in range(len(scalbase)): #check for each plane j if v could fit between minimum and maximum reach of scale
+                    if v[j] >= self.Scalings[i][j][1] and v[j] <= self.Scalings[i][j][1] + self.Scalings[i][j][0]:
+                        counter += 1
+                    else:
+                        break
+                if len(scalbase) == counter:  #all values of v are within range of scale for pool i
+                    if elevscal >= self.Scalings[i][2][1] / 65535: #test thate required scale level for elevation could be realized e.g. elevscal of 0.05m (65535*0.05=3276.75 scaling)
+                        if len(self.V[i]) < 65534: #Vertex pool has space to add addtional vertex
+                            poolID4v = i #existing pool id found fulfilling all requirements
+                            self._log_.info("Existing with index {} and scale vector {} found.".format(poolID4v, self.Scalings[poolID4v]))
+                            break
+        if poolID4v != None: #existing pool was found
+            self.V[poolID4v].append(v)
+        else: #no existing pool fulfilling requirements was found, so new pool has to be created and added with v
+            if len(self.V) >= 65535: #reached maximumb number of pools, no pool could be added any more
+                self._log_.error("DSF File already has maximum number of point pools. Addtional pools required for change can not be added!!!")
+                return None
+            self.V.append([v])
+            self.Scalings.append(scalbase)
+            self.Scalings[-1][2][0] = 65535 * elevscal #new multiplier based on required scaling for elevation defined for new pool
+            self.Scalings[-1][2][1] = int(-500 + int((v[2]+500)/(65535 * elevscal)) * (65535 * elevscal)) #offset for elevation of v   ######## -500m is deepest vaule that can be defined with this routine ####
+            poolID4v = len(self.Scalings) - 1 #ID for the pool is the last one added
+            self._log_.info("New pool with index {} and scaling {} added to insert vertex.".format(poolID4v, self.Scalings[poolID4v]))
+            self.submP.add(poolID4v)
+        return poolID4v, len(self.V[poolID4v])-1 #returning ID of Pool and index where v was added
 
         
     def cutEdges(self, v, w, accuracy = 10): #cuts all edges of trias that intersect with segment from vertex v to w, if existing vertices/edges are closer than accuracy in m, they will be used   ########### NEW #########
         ## Note: If edge is completely within a tria then nothing is cut. In that case the segment will be inserted by just inserting the vertices of the edge
         #### TBD: What happens if segment vw is overlapping an existing edge of the tria?? Function intersection will not return values so only endpoints of vw or other cutting points outside should be inserted and thus fine. But to be checked !!!! ### TBD ###
+        #### TBD: function adds new vertices for each tria. Already added trias in neighbour vertex should be re-used !!!!!! ###########################
         cPs = [] #functions returns a list of tuples to vertices (pool ID, index) that are lying on intersection line v to w (either created or used within accuracy)
         l = self.PatchesInArea(*self.BoundingRectangle([v,w]))   ### * converts returned tuple in an argument list
         self._log_.info("Inserting segement from {} to {} into mesh, which is relevant in {} patches.".format(v, w, len(l)))
@@ -966,13 +1090,20 @@ class XPLNEDSF:
         
     def cutRwyProfileInMesh(self, rwy, interval=20): ###NEW######
         #cuts runway in mesh with intersections of runway every interval meter; allows to set granular elevation
+        def add2profile(V, rwyside): #adds vertices in V to rwyside of profile   #### NEW3 ####
+            for v in V:
+                verticesOnShoulder[rwyside].add(v)
+                if len(self.V[v[0]][v[1]]) == 5: #only use vertices without additional s/t coordinates ### TBD: create if none exist!! 
+                    dictShoulder_A[round(distance(rwy[1], self.V[v[0]][v[1]]), 3)] = v   ####TBD DICT PER SIDE!!!
+                self._log_.info("+++ Added coordinates for RWY Border A: {}".format(self.V[v[0]][v[1]])) ####### JUST FOR CHECK ### TO BE REMOVED !! ###
+                
         self._log_.info("Cutting Runway with boundary {} into the mesh, having intersecitons every {} m.".format(rwy, interval))
         accuracy = 1 ######### TBD check if 1m accuracy is right value for cutting RWY Boundary
         verticesOnShoulder_A = set() #will inclued all vertices of shoulder A of RWY (= one side of RWY)
         dictShoulder_A = {} #dictonary for shoulder with key is distance from point rwy[1] and pool/vertex id to a vertex as value
         for v in self.cutEdges(rwy[1], rwy[2], accuracy):
             verticesOnShoulder_A.add(v)
-            if len(self.V[v[0]][v[1]]) == 5: #only use vertices with additional s/t coordinates ### TBD: create if none exist!!
+            if len(self.V[v[0]][v[1]]) == 5: #only use vertices without additional s/t coordinates ### TBD: create if none exist!! 
                 dictShoulder_A[round(distance(rwy[1], self.V[v[0]][v[1]]), 3)] = v
             self._log_.info("+++ Added coordinates for RWY Border A: {}".format(self.V[v[0]][v[1]])) ####### JUST FOR CHECK ### TO BE REMOVED !! ###
         for v in self.insertVertex(rwy[1], accuracy):
@@ -1104,8 +1235,7 @@ class XPLNEDSF:
         self._setPatchBoundary_(rwyPatch)
         self.Patches.append(rwyPatch)
         ### TBD1: When inserting Vertices into pools by functions above do it in new pools wiht adapted scaling to allow millimeter height.
-        ### TBD2: Adapht elevation of points using elevation given by spline interpolation (done perhaps outside this function)
-        ### TBD3: Allow definition of a new terrain like gras for airport
+        ### TBD2: Allow definition of a new terrain like gras for airport
         return verticesOnShoulder_A.union(verticesOnShoulder_B) ### TBD: return also vertices on buttom and top line of RWY
 
     def cutRwyProfileInMeshOLD(self, rwy, interval=20): ###NEW###### but privious version to be removed ##########
@@ -1155,7 +1285,6 @@ class XPLNEDSF:
         self._log_.info("Cutting Runway done. Now there are {} vertices inside and at the border of the Polygon in the mesh.".format(len(border_vertices.union(inner_vertices))))
         return border_vertices.union(inner_vertices)        
         
-
             
     def getElevation(self, x, y, z = -32768): #gets Elevation at point (x,y) from raster grid Elevation
         if int(z) != -32768: #in case z vertex is different from -32768 than this is the right height and not taken from raster
@@ -1298,6 +1427,9 @@ class XPLNEDSF:
 
     
     def write(self, file): #writes data to dsf file with according file-name
+        for p in self.Patches: ##### NEW 3 ########## JUST ERROR CHECK ################ TO BE REMOVED ###################################
+            p.trias = p.triangles()  
+        self.checkTriasOutOfRange() ##### NEW 3 ########## JUST ERROR CHECK ################ TO BE REMOVED ###################################
         self._progress_[0] = 0
         self._progress_[1] = 0 #keep original file length as goal to reach in progress[2]
         self._packAtoms_() #first write values of Atom strings that below will written to file   
