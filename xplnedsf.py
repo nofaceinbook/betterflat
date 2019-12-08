@@ -1,6 +1,6 @@
 #******************************************************************************
 #
-# xplnedsf.py        Version 0.3.2
+# xplnedsf.py        Version 0.3.3
 # ---------------------------------------------------------
 # Python module for reading and writing X_Plane DSF files.
 #
@@ -240,78 +240,6 @@ class XPLNEDSF:
         self.DefRasters = {}   #dictionary containing for each index number (0 to n-1) the name of Raster definition (for the moment assuing "elevaiton" is first with index 0)
         self.submP = set() #set with indices of vertex pools that allow submeter elevation; not given by dsf file but checked when submeter vertices should be added   ########## NEW3 #############
         self._log_.info("Class XPLNEDSF initialized.")
-
-    def checkTriasOutOfRange(self): #Checks if index in tria to Vertex is out of range   ############## NEW 3: ERROR CHECK - MIGHT BE REMOVED LATER ##############
-        self._log_.info("*** CHECKING IF POOL INDICES IN TRIAS ARE OUT OF RANGE ***")
-        for p in self.Patches:
-            for t in p.trias:
-                for v in t:
-                    if v[1] > len(self.V[v[0]]):  
-                        self._log_.warning("Index to Pool {} is higher {} than number of elements {}.".format(v[0], v[1], len(self.V[v[0]])))       
-
-    def trianglesCheck(self): #Checks if index in trias to Vertex is out of range   ############## NEW 3: ERROR CHECK - MIGHT BE REMOVED LATER ##############
-        self._log_.info("*** NEW +++ CHECKING IF POOL INDICES IN TRIAS ARE OUT OF RANGE ***")
-        def checktria(t, cmdid, patchid="(not defined yet)"):
-            for v in t:
-                if v[1] > len(self.V[v[0]]):  
-                    self._log_.warning("Index to Pool {} is higher {} than number of elements {} in CMDID {} within Patch ID {}.".format(v[0], v[1], len(self.V[v[0]]), cmdid, patchid))               
-        for pid in range(len(self.Patches)):
-            patch = self.Patches[pid]
-            l = []
-            p = None #current pool needs to be defined with first command
-            for c in patch.cmds:
-                if c[0] == 1: # Pool index changed within patch, so change
-                    p = c[1]
-                elif c[0] == 23: # PATCH TRIANGLE
-                    for v in range (1, len(c), 3): #skip value (command id)
-                        l.append( [ [p, c[v]], [p, c[v + 1]], [p, c[v + 2]] ])
-                        checktria(l[-1], 23, pid)
-                elif c[0] == 24: # PATCH TRIANGLE CROSS POOL
-                    for v in range (1, len(c), 6): #skip value (command id)
-                        l.append( [ [c[v], c[v+1]], [c[v+2], c[v+3]], [c[v+4], c[v+5]] ] )
-                        checktria(l[-1], 24)
-                elif c[0] == 25: # PATCH TRIANGLE RANGE 
-                    for v in range(c[1], c[2] - 1, 3): #last index has one added 
-                        l.append( [ [p, v], [p, v + 1], [p, v + 2] ] )
-                        checktria(l[-1], 25)
-                elif c[0] == 26: # PATCH TRIANGLE STRIP
-                    for v in range (3, len(c)): #skip first three values - including command id are not needed any more
-                        if v % 2: ##### NEW: Strip 1,2,3,4,5 refers to triangles 1,2,3 2,4,3 3,4,5 ############# NEW ########### ERROR CORRECTION ########## NEW ####
-                            l.append( [ [p, c[v-2]], [p, c[v-1]], [p, c[v]] ] )  ## NEW ##
-                            checktria(l[-1], 261, pid)
-                        else:                                                    ## NEW ##
-                            l.append( [ [p, c[v-2]], [p, c[v]], [p, c[v-1]] ] )  ## NEW ##
-                            checktria(l[-1], 262, pid)
-                elif c[0] == 27: # PATCH TRIANGLE STRIP CROSS POOL             
-                    for v in range (6, len(c), 2): #skip first values - including command id are not needed any more
-                        if v % 4: ##### NEW: Strip 1,2,3,4,5 refers to triangles 1,2,3 2,4,3 3,4,5 ############# NEW ########### ERROR CORRECTION ########## NEW ####
-                            l.append( [ [c[v-5], c[v-4]], [c[v-3], c[v-2]], [c[v-1], c[v]] ] )  ## NEW ##
-                            checktria(l[-1], 271)
-                        else:                                                                   ## NEW ##
-                            l.append( [ [c[v-5], c[v-4]], [c[v-1], c[v]], [c[v-3], c[v-2]] ] )  ## NEW ##
-                            checktria(l[-1], 272)
-                elif c[0] == 28:  # PATCH TRIANGLE STRIP RANGE
-                    for v in range(c[1], c[2] - 2): # last index has one added so -2 as we go 2 up and last in range is not counted
-                        if (v - c[1]) % 2:  ##### NEW: Strip 1,2,3,4,5 refers to triangles 1,2,3 2,4,3 3,4,5 ############# NEW ########### ERROR CORRECTION ########## NEW ####
-                            l.append( [ [p, v], [p, v + 2], [p, v + 1] ] ) ## NEW ##
-                            checktria(l[-1], 281)
-                        else:                                              ## NEW ##
-                            l.append( [ [p, v], [p, v + 1], [p, v + 2] ] ) ## NEW ##
-                            checktria(l[-1], 282)
-                elif c[0] == 29: # PATCH TRIANGLE FAN                          ##(all FAN commands not yet tested!!!!!!!!)##
-                    for v in range (3, len(c)): #skip first three values - including command id are not needed any more
-                        l.append( [ [p, c[1]], [p, c[v-1]], [p, c[v]] ] ) #at c[1] is the center point id of the fan
-                        checktria(l[-1], 29)
-                elif c[0] == 30: # PATCH TRIANGLE FAN CROSS POOL
-                    for v in range (6, len(c), 2): #skip first values - including command id are not needed any more
-                        l.append( [ [c[1], c[2]], [c[v-3], c[v-2]], [c[v-1], c[v]] ] ) #at c[1] is the pool index for fan center and at c[2] the point id
-                        checktria(l[-1], 30)
-                elif c[0] == 31:  # PATCH FAN RANGE
-                    for v in range(c[1], c[2] - 2): # at c[1] center point; last index has one added so -2 as we go 2 up and last in range is not counted
-                        l.append( [ [p, c[1]], [p, v + 1], [p, v + 2] ] )
-                        checktria(l[-1], 31)
-        return 0
-              
 
     def _setLogger_(self, logname):
         if logname == '__XPLNEDSF__': #define default logger if nothing is set
@@ -708,7 +636,7 @@ class XPLNEDSF:
                 p = XPLNEpatch(flag_physical, nearLOD, farLOD, poolIndex, defIndex)
                 self.Patches.append(p)
             elif c[0] >= 23 and c[0] <= 31: # the command is about a patch, so store it to current patch
-                if patchPoolIndex != poolIndex:
+                if patchPoolIndex != poolIndex: #change of pool index within patch is possible
                     self.Patches[-1].cmds.append( [1, poolIndex] ) #change pool with patch via according command
                     patchPoolIndex = poolIndex #now within patch also current pool will be used
                 if self.Patches[-1].defIndex != defIndex:
@@ -721,14 +649,24 @@ class XPLNEDSF:
         for p in self.Patches: #add to each patch its trias as list and the rectangle boundary coordinates of patch   ########### NEW ############# NEW #####
             p.trias = p.triangles()   ##NEW##
             self._setPatchBoundary_(p) ##NEW##
-        #self.checkTriasOutOfRange() ################## NEW 3 ###########  CHECK TO BE REMOVED ################################
-        self.trianglesCheck() ################## NEW 3 ###########  CHECK TO BE REMOVED ################################
         self._log_.info("{} patches extracted from commands.".format(len(self.Patches)))
         self._log_.info("{} different Polygon types including there definitions extracted from commands.".format(len(self.Polygons)))
         self._log_.info("{} different Objects with placements coordinates extracted from commands.".format(len(self.Objects)))
         self._log_.info("{} different Network subtypes extracted from commands (could include double count).".format(len(self.Networks)))
 
     def _packCMDS_(self): #packs all CMDS of Object, Polygons, Networks and Patches in binary string to be later written to file #####NEW FUCTION### NEW ####
+        ################################# TBD: Check function for polygons and object placements !!!!!! #############################################################
+        self._log_.info("Start to pack CMDS")   #### NEW 4 : put definition of variables befor encCMD function, as values like poolIndex will be changed inside ##############
+        #SET state variables
+        flag_physical = None
+        nearLOD = None  
+        farLOD = None
+        poolIndex = None
+        defIndex = None
+        subroadtype = None
+        junctionoffset = None  #### set to 0 if directly set below as in X-Plane standard dsf files
+        enccmds = bytearray() #these will be the encoded CMDS to be returned  ################ TBD CHECK if this local instanced variable really will be copied and stay in object ?????? ##################
+        ### local function for single CMD encoding ###
         def encCMD(c): #encodes single CMD in array c and returns its binary
             ecmd = b'' 
             id = c[0] #id of CMD stored as first value in list
@@ -760,16 +698,6 @@ class XPLNEDSF:
                 return(b'')
             return(ecmd)
         ### end of inner function to pack single CMDS ###   
-        self._log_.info("Start to pack CMDS")
-        #SET state variables
-        flag_physical = None
-        nearLOD = None  
-        farLOD = None
-        poolIndex = None
-        defIndex = None
-        subroadtype = None
-        junctionoffset = None  #### set to 0 if directly set below as in X-Plane standard dsf files
-        enccmds = bytearray() #these will be the encoded CMDS to be returned  ################ TBD CHECK if this local instanced variable really will be copied and stay in object ?????? ##################
         for d in self.DefObjects: #for each object definition write according CMDS
             enccmds.extend(encCMD([3, d])) #definition set according to current definition id; function will handle if id > 255
             for c in self.Objects[d]:
@@ -803,9 +731,9 @@ class XPLNEDSF:
             if defIndex != d.defIndex:
                 enccmds.extend(encCMD([3, d.defIndex])) #definition set according to current definition id; function will handle if id > 255
                 defIndex = d.defIndex
-            #if poolIndex != d.cmds[0][1]: #Pool-Index is defined by first command and required to be defined directly before new Patch is defined!    #### NEW3 ERROR TEST ###
-            enccmds.extend(encCMD([1, d.cmds[0][1]])) ####### NEW3 ERROR TEST: ALWAYS WRITE COMMAND ID #########   ##### CHECK IF CHANGED AGAIN ####
-            poolIndex = d.cmds[0][1] #### NEW3 #################################################################   ##### CHECK IF CHANGED AGAIN ####
+            if poolIndex != d.cmds[0][1]: #Pool-Index is defined by first command and required to be defined directly before new Patch is defined!    ##
+                enccmds.extend(encCMD([1, d.cmds[0][1]])) #include command for changing poolIndex
+                poolIndex = d.cmds[0][1] #update state variable
             if nearLOD == d.near and farLOD == d.far:
                 if flag_physical == d.flag:
                     enccmds.extend(encCMD([16]))
@@ -819,6 +747,8 @@ class XPLNEDSF:
                 flag_physical = d.flag
             for c in d.cmds[1:]:   ##skip first command as this is pool defintion written above
                 enccmds.extend(encCMD(c))
+                if c[0] == 1: #change of poolIndex can happen within patch commands    ######## NEW 4 #########
+                    poolIndex = c[1] #therefore also state variable has to be adapted        ######## NEW 4 #########
         self._Atoms_['SDMC'] = enccmds #Commands Atom now set to the now packed CMDS
         self._log_.info("Ended to pack CMDS")
  ########### END of NEW function _packCMDS_() #################               
@@ -875,7 +805,7 @@ class XPLNEDSF:
                 if v[1] < 0: ############## NEW 3: ERROR CHECK - TO BE REMOVED LATER ##############
                     self._log_.warning("Index to Pool {} is negative: {}".format(v[0], v[1]))
                     return 1
-                if v[1] > len(self.V[v[0]]):  ############## NEW 3: ERROR CHECK - TO BE REMOVED LATER ##############
+                if v[1] >= len(self.V[v[0]]):  ############## NEW 3: ERROR CHECK - TO BE REMOVED LATER ##############
                     self._log_.warning("Index to Pool {} is higher {} than number of elements {}.".format(v[0], v[1], len(self.V[v[0]])))
                     return 1
                 if self.V[v[0]][v[1]][0] < p.minx:
@@ -967,7 +897,8 @@ class XPLNEDSF:
                     cuttingPoint = intersection(v, w, tv[edge], tv[(edge+1)%3]) # modulo 3 returns to first vertex to close tria
                     if cuttingPoint:
                         existing_vertex_close = False
-                        for i in range(3): #check if v is too close to vertex of tria
+                        for i in [edge, (edge+1)%3]: #check if v is too close to vertex of tria ONLY FOR ADJECENT vertices on edge   ######## NEW 4 ############
+                            self._log_.info("CLOSE TO VERTEX CHECK with vertex {}".format(i))  ################## TESTING ########################
                             if distance(tv[i], cuttingPoint) < accuracy: 
                                 self._log_.info("   Cutting Point {} not inserted as too close to vertex of the triangle it is in.".format(cuttingPoint))
                                 cPs.append((t[i][0], t[i][1])) ### Attention: adds all vertices of t that are within accuracy, not just one
@@ -1070,11 +1001,12 @@ class XPLNEDSF:
     def cutPolyInMesh(self, poly, accuracy=10): ### NEW #### #updates dsf mesh to contain the polygon shape as edges (if existing vertices, edges are closer than accourcy in m they will be used), elevation will be given by mesh  ######## NEW #####
         self._log_.info("Cutting Polygon with {} vertices into the mesh.".format(len(poly) - 1))
         border_vertices = set() #will inclued all vertices of new and existing vertices defining the border of the poly within the mesh
-        for i in range(len(poly) - 1):   # assumes that last vertex in poly is same as first, to have a closed polygon
-            for v in self.cutEdges(poly[i], poly[i+1], accuracy):
-                border_vertices.add(v)
+        for i in range(len(poly) - 1):   # assumes that last vertex in poly is same as first, to have a closed polygon   #### NEW 4 insert verices first ####
             for v in self.insertVertex(poly[i], accuracy): 
                 border_vertices.add(v)
+        for i in range(len(poly) - 1):   # assumes that last vertex in poly is same as first, to have a closed polygon   #### NEW 4 and thenn cut edges ###
+            for v in self.cutEdges(poly[i], poly[i+1], accuracy):
+                border_vertices.add(v)               
         inner_vertices = set()
         l = self.PatchesInArea(*self.BoundingRectangle(poly))
         for p in l:
@@ -1090,112 +1022,82 @@ class XPLNEDSF:
         
     def cutRwyProfileInMesh(self, rwy, interval=20): ###NEW######
         #cuts runway in mesh with intersections of runway every interval meter; allows to set granular elevation
-        def add2profile(V, rwyside): #adds vertices in V to rwyside of profile   #### NEW3 ####
+        def add2profile(V, shoulderStart, shoulderV, dictV): #adds vertices in V to shoulder and dict    #### NEW3 ####
             for v in V:
-                verticesOnShoulder[rwyside].add(v)
-                if len(self.V[v[0]][v[1]]) == 5: #only use vertices without additional s/t coordinates ### TBD: create if none exist!! 
-                    dictShoulder_A[round(distance(rwy[1], self.V[v[0]][v[1]]), 3)] = v   ####TBD DICT PER SIDE!!!
-                self._log_.info("+++ Added coordinates for RWY Border A: {}".format(self.V[v[0]][v[1]])) ####### JUST FOR CHECK ### TO BE REMOVED !! ###
+                shoulderV.add(v)
+                if len(self.V[v[0]][v[1]]) == 5: #only use vertices without additional s/t coordinates ### TBD: create if none exist!! ===> CHECK based on list/dict with coordinates if for each coordinate entry was found
+                    dictV[round(distance(shoulderStart, self.V[v[0]][v[1]]), 3)] = v   
+                self._log_.info("+++ Added coordinates for RWY current border {}".format(self.V[v[0]][v[1]])) ####### JUST FOR CHECK ### TO BE REMOVED !! ###
                 
         self._log_.info("Cutting Runway with boundary {} into the mesh, having intersecitons every {} m.".format(rwy, interval))
-        accuracy = 1 ######### TBD check if 1m accuracy is right value for cutting RWY Boundary
-        verticesOnShoulder_A = set() #will inclued all vertices of shoulder A of RWY (= one side of RWY)
-        dictShoulder_A = {} #dictonary for shoulder with key is distance from point rwy[1] and pool/vertex id to a vertex as value
-        for v in self.cutEdges(rwy[1], rwy[2], accuracy):
-            verticesOnShoulder_A.add(v)
-            if len(self.V[v[0]][v[1]]) == 5: #only use vertices without additional s/t coordinates ### TBD: create if none exist!! 
-                dictShoulder_A[round(distance(rwy[1], self.V[v[0]][v[1]]), 3)] = v
-            self._log_.info("+++ Added coordinates for RWY Border A: {}".format(self.V[v[0]][v[1]])) ####### JUST FOR CHECK ### TO BE REMOVED !! ###
-        for v in self.insertVertex(rwy[1], accuracy):
-            verticesOnShoulder_A.add(v)
-            if len(self.V[v[0]][v[1]]) == 5: #only use vertices with additional s/t coordinates ### TBD: create if none exist!!
-                dictShoulder_A[0] = v
-            self._log_.info("+++ Added coordinates for buttom A RWY Corner: {}".format(self.V[v[0]][v[1]])) ####### JUST FOR CHECK ### TO BE REMOVED !! ###
-        for v in self.insertVertex(rwy[2], accuracy):
-            verticesOnShoulder_A.add(v)
-            if len(self.V[v[0]][v[1]]) == 5: #only use vertices with additional s/t coordinates ### TBD: create if none exist!!
-                dictShoulder_A[distance (rwy[1], rwy[2])] = v
-            self._log_.info("+++ Added coordinates for top A RWY Corner: {}".format(self.V[v[0]][v[1]])) ####### JUST FOR CHECK ### TO BE REMOVED !! ###            
-        ###dictShoulder_A[distance (rwy[1], rwy[2])] = False ### TBD: Are first and last point of Shoulder really added like that??
-        verticesOnShoulder_B = set() #will inclued all vertices of shoulder B of RWY (= one side of RWY)
-        dictShoulder_B = {} #dictonary for shoulder with key is distance from point rwy[0] and pool/vertex id to a vertex as value
-        for v in self.cutEdges(rwy[0], rwy[3], accuracy):
-            verticesOnShoulder_B.add(v)
-            if len(self.V[v[0]][v[1]]) == 5: #only use vertices with additional s/t coordinates ### TBD: create if none exist!!
-                dictShoulder_B[round(distance(rwy[0], self.V[v[0]][v[1]]), 3)] = v
-            self._log_.info("+++ Added coordinates for RWY Border B: {}".format(self.V[v[0]][v[1]])) ####### JUST FOR CHECK ### TO BE REMOVED !! ###
-        for v in self.insertVertex(rwy[0], accuracy):
-            verticesOnShoulder_B.add(v)
-            if len(self.V[v[0]][v[1]]) == 5: #only use vertices with additional s/t coordinates ### TBD: create if none exist!!
-                dictShoulder_B[0] = v
-            self._log_.info("+++ Added coordinates for buttom B RWY Corner: {}".format(self.V[v[0]][v[1]])) ####### JUST FOR CHECK ### TO BE REMOVED !! ###
-        for v in self.insertVertex(rwy[2], accuracy):
-            verticesOnShoulder_B.add(v)
-            if len(self.V[v[0]][v[1]]) == 5: #only use vertices with additional s/t coordinates ### TBD: create if none exist!!
-                dictShoulder_B[distance (rwy[1], rwy[2])] = v #insert in dict with distance from border A in order to avoid deviation in distance and such doubled vertices and end
-            self._log_.info("+++ Added coordinates for top B RWY Corner: {}".format(self.V[v[0]][v[1]])) ####### JUST FOR CHECK ### TO BE REMOVED !! ###   
-        ###dictShoulder_B[distance (rwy[0], rwy[3])] = False ### TBD: Are first and last point of Shoulder really added like that??
-        ############### TBD: Also insert buttom and top line of RWY !!!!!!!
-        for k in dictShoulder_B: #add all distances in Shoulder B to Directory of Shoulder A, so that there are always oposite vertices
-            for v in self.insertVertex([rwy[1][0] + k / distance(rwy[0], rwy[3]) * (rwy[2][0] - rwy[1][0]), rwy[1][1] + k / distance(rwy[0], rwy[3]) * (rwy[2][1] - rwy[1][1])], accuracy):
-                verticesOnShoulder_A.add(v)
-                if len(self.V[v[0]][v[1]]) == 5: #only use vertices with additional s/t coordinates ### TBD: create if none exist!!
-                    dictShoulder_A[k] = v
-                self._log_.info("+++ Added coordinates for RWY Border B which was opposite on Border A: {}".format(self.V[v[0]][v[1]])) ####### JUST FOR CHECK ### TO BE REMOVED !! ###
-        for k in dictShoulder_A: #add all distances in Shoulder A to Directory of Shoulder B, so that there are always oposite vertices
-            for v in self.insertVertex([rwy[0][0] + k / distance(rwy[1], rwy[2]) * (rwy[3][0] - rwy[0][0]), rwy[0][1] + k / distance(rwy[1], rwy[2]) * (rwy[3][1] - rwy[0][1])], accuracy):
-                verticesOnShoulder_B.add(v)
-                if len(self.V[v[0]][v[1]]) == 5: #only use vertices with additional s/t coordinates ### TBD: create if none exist!!
-                    dictShoulder_B[k] = v
-                self._log_.info("+++ Added coordinates for RWY Border A which was opposite on Border B: {}".format(self.V[v[0]][v[1]])) ####### JUST FOR CHECK ### TO BE REMOVED !! ###                    
+        accuracy = 1 ######### TBD check if 1m accuracy is right value for cutting RWY Boundary --> TBD: have it variabl in future ##################
+        verticesOnShoulder = [set(), set(), set(), set()] #list of sets, that will inclued all verteices of shoulder per side of RWY
+        dictShoulder = [{}, {}, {}, {}] #list of dictonaries with key is distance from point RWY-side-start-Point and pool/vertex id to a vertex as value
+        ### IMPORTANT: Order of lists are as order of rwy-corners: rwy button, long side A, rwy top, long side B
+        
+        #First we cut rectangle for runway into the mesh
+        for i,start,end in [(1,1,2), (3,0,3), (0,0,1), (2,2,3)]: #i index for list per RWY, side; start and end are indexes to runway corners in rwy; first insert long sides then button, then top
+            self._log_.info("Inserting runway side from corner {} to corner {} in mesh.".format(start, end))
+            add2profile(self.cutEdges(rwy[start], rwy[end], accuracy), rwy[start], verticesOnShoulder[i], dictShoulder[i])
+            add2profile(self.insertVertex(rwy[start], accuracy), rwy[start], verticesOnShoulder[i], dictShoulder[i]) ##### SHOULD BE INSERTED IN DICT WITH DISTANCE KEY 0
+            add2profile(self.insertVertex(rwy[end], accuracy), rwy[start], verticesOnShoulder[i], dictShoulder[i])  ##### SHOULD BE INSERTED IN DICT WITH DISTANCE KEY rwy side length
+            ##########Runway long sides may have different length --> always insert last node with same length to avoid differences ???? ##################
+        
+        #Second we insert vertices on long rwy sides to opposite sides to have symetric points on each side
+        self._log_.info("Add to runway shoulder A the vertices of Shoulder B.")
+        for k in dictShoulder[3]: #add all distances in Shoulder B (index 3) to Directory of Shoulder A (index 1), so that there are always oposite vertices
+            add2profile(self.insertVertex([rwy[1][0] + k / distance(rwy[0], rwy[3]) * (rwy[2][0] - rwy[1][0]), rwy[1][1] + k / distance(rwy[0], rwy[3]) * (rwy[2][1] - rwy[1][1])], accuracy), rwy[1], verticesOnShoulder[1], dictShoulder[1])
+        self._log_.info("Now vice versa. add to runway shoulder B the vertices of Shoulder A.")
+        ########## IS THIS NO DOUBLE INSERTION NOW AS B WAS ALREADY ADDED TO A?????
+        for k in dictShoulder[1]: #add all distances in Shoulder A(index 1) to Directory of Shoulder B (index 3), so that there are always oposite vertices
+            add2profile(self.insertVertex([rwy[0][0] + k / distance(rwy[1], rwy[2]) * (rwy[3][0] - rwy[0][0]), rwy[0][1] + k / distance(rwy[1], rwy[2]) * (rwy[3][1] - rwy[0][1])], accuracy), rwy[0], verticesOnShoulder[3], dictShoulder[3])
+            ########## Distanc keys for directories are not identical for each side, as they are here calculated each time now from start rwy corner !!!!!! Okay???
+             
+        #Third we insert on each sides the vertices for the intervalls
+        self._log_.info("Now cut runway in intervals.")
+        accuracy /= 2 ##### TO BE CHECKED: USE HALF OF ACCURACY, TO BE SURE TO GET ALWAYS A VERTEX ON OPPOSITE INSERTED AND NOT HAVING DIFFERENCES ON NUMBER OF VERTICES ON EACH SIDE
+        #################### TBD: USE BELOW AGAIN INTERNAL FUNCTION FOR INSERTING VERTICES AS ABOVE (especially to solve requriment of new vertices with 5 planes !!!!!!!!!!! #####################
         intervalposition = 0
-        distances_shoulderA = [] #actually the calculated coordinates  ######### TBD: Distance Array not needed any more --> to be deleted
-        ############ TBD: When inserting intervals use half of accurcy then for creating boundary to avoid specific error cases!!!!!
         rwyAcoords = [] #sorted coordinates of RWY border A from buttom to top of RWY
         rwyBcoords = [] #sorted coordinates of RWY border B from buttom to top of RWY
         rwyApv = [] #sorted list on pool/vertex ids to build new rwy trias for RWY border A
         rwyBpv = [] #sorted list on pool/vertex ids to build new rwy trias for RWY border B
-        for k in sorted(dictShoulder_A.keys()):
+        for k in sorted(dictShoulder[1].keys()): ### Shoulder A is index 1
             width = (k-intervalposition) / (int((k - intervalposition) / interval) + 1) #define new width for intervals with maximum length of interval to next point in dict
             intervalposition += width #skip first already included vertex ##TBD: check if could be done better
             while intervalposition < int(k):
-                distances_shoulderA.append(intervalposition) #actually the calculated coordinates as below; might be removed
                 for v in self.insertVertex([rwy[1][0] + intervalposition / distance(rwy[1], rwy[2]) * (rwy[2][0] - rwy[1][0]), rwy[1][1] + intervalposition / distance(rwy[1], rwy[2]) * (rwy[2][1] - rwy[1][1])], accuracy):
-                    verticesOnShoulder_A.add(v)
+                    verticesOnShoulder[1].add(v)
                     if len(self.V[v[0]][v[1]]) == 5:  #only use vertices with additional s/t coordinates ### TBD: create if none exist!!
                         rwyApv.append(v)
                     self._log_.info("+++ Added coordinates in interval for Border A: {}".format(self.V[v[0]][v[1]])) ####### JUST FOR CHECK ### TO BE REMOVED !! ###
                 rwyAcoords.append((self.V[v[0]][v[1]][0], self.V[v[0]][v[1]][1]))
                 intervalposition += width
-            distances_shoulderA.append(k) ##might be reomved, not needed
-            v = dictShoulder_A[k] #current vertex is now at position in dictonary
+            v = dictShoulder[1][k] #current vertex is now at position in dictonary
             rwyApv.append(v)
             rwyAcoords.append((self.V[v[0]][v[1]][0], self.V[v[0]][v[1]][1]))
             intervalposition = int(k)
         intervalposition = 0
-        distances_shoulderB = [] ######### TBD: Distance Array not needed any more --> to be deleted
-        for k in sorted(dictShoulder_B.keys()):
+        for k in sorted(dictShoulder[3].keys()): ### Shoulder B is index 3
             width = (k-intervalposition) / (int((k - intervalposition) / interval) + 1) #define new width for intervals with maximum length of interval to next point in dict
             intervalposition += width #skip first already included vertex ##TBD: check if could be done better
             while intervalposition < int(k):
-                distances_shoulderB.append(intervalposition) #actually the calculated coordinates as below; might be removed
                 for v in self.insertVertex([rwy[0][0] + intervalposition / distance(rwy[0], rwy[3]) * (rwy[3][0] - rwy[0][0]), rwy[0][1] + intervalposition / distance(rwy[0], rwy[3]) * (rwy[3][1] - rwy[0][1])], accuracy):
-                    verticesOnShoulder_B.add(v)
+                    verticesOnShoulder[3].add(v)
                     if len(self.V[v[0]][v[1]]) == 5:  #only use vertices with additional s/t coordinates ### TBD: create if none exist!!
                         rwyBpv.append(v)
                     self._log_.info("+++ Added coordinates in interval for RWY Border B: {}".format(self.V[v[0]][v[1]])) ####### JUST FOR CHECK ### TO BE REMOVED !! ###
                 rwyBcoords.append((self.V[v[0]][v[1]][0], self.V[v[0]][v[1]][1]))
                 intervalposition += width
-            distances_shoulderB.append(k) #actually the coordinates in dict
-            v = dictShoulder_B[k] #current vertex is now at position in dictonary
+            v = dictShoulder[3][k] #current vertex is now at position in dictonary
             rwyBpv.append(v)
             rwyBcoords.append((self.V[v[0]][v[1]][0], self.V[v[0]][v[1]][1]))
             intervalposition = int(k)
         self._log_.info("CREATED RUNWAY PROFILE:")
         for i in range(len(rwyAcoords)):
             self._log_.info("Interval at {}m {} coords:{}    opposite {}m {} coords:{} ".format(round(distance(rwyAcoords[0], rwyAcoords[i]), 3), rwyApv[i], rwyAcoords[i], round(distance(rwyBcoords[0], rwyBcoords[i]), 3), rwyBpv[i], rwyBcoords[i]))
-        ############ TBD: Double check that rwyABcoords are same len and that really always on opposite vertex is existent
-        inner_vertices = set() ### Find vertices inside rwy boundary
+        ############ TBD: Double check that rwyABcoords are same len and that really always on opposite vertex is existent ####
+        inner_vertices = set() # Find vertices inside rwy boundary
         l = self.PatchesInArea(*self.BoundingRectangle(rwy))
         for p in l:
             for t in p.trias:
@@ -1203,9 +1105,10 @@ class XPLNEDSF:
                 for i in range(3):
                     if PointInPoly(vt[i], rwy):
                         inner_vertices.add((t[i][0], t[i][1]))
-        allRWYvertices = verticesOnShoulder_A.union(verticesOnShoulder_B) #vertices on boundaris + inner vertices 
-        allRWYvertices.union(inner_vertices)
-        ##### TBD: alls include vertices on buttom and top line of RWY !!! ####################################
+        allRWYvertices = verticesOnShoulder[1].union(verticesOnShoulder[3]) #vertices on boundaries from long runway sides 
+        allRWYvertices = allRWYvertices.union(verticesOnShoulder[0]) #also vertices inserted from button     ###### NEW 4 #######
+        allRWYvertices = allRWYvertices.union(verticesOnShoulder[2]) #and vertices from top of runway        ###### NEW 4 #######
+        allRWYvertices = allRWYvertices.union(inner_vertices)            ######## NEW 4: always assign result of union again to allRWYvertices !! ####################
         self._log_.info("ALL RWY VERTICES: {}.".format(allRWYvertices))
         for p in l:
             toberemoved = []
@@ -1218,74 +1121,43 @@ class XPLNEDSF:
                 self._log_.info("    Removed RWY triangle {}.".format(t))
             p.trias2cmds() #Update Commands accordingly
         terrain_id = 0 #find terrain id for new patch that includes trias for runway
-        ##### TBD: Allow flexible defintion of terrain that should be used for runway, and add it if not already in current list
-        while terrain_id < len(self.DefTerrains) and self.DefTerrains[terrain_id] != "lib/g10/terrain10/coni_tmp_rain_sflat.ter":
+        ############ TBD: Allow flexible defintion of terrain that should be used for runway, and add it if not already in current list ##################################################
+        while terrain_id < len(self.DefTerrains) and self.DefTerrains[terrain_id] != "lib/g10/terrain10/coni_tmp_rain_sflat.ter" and self.DefTerrains[terrain_id] != "lib/g10/terrain10/grass_tmp_wet_fl.ter":
             self._log_.info("      Terrain id: {} named:{}.".format(terrain_id, self.DefTerrains[terrain_id]))
             terrain_id += 1        
         self._log_.info("TERRAIN ID FOUND IS: {} named:{}.".format(terrain_id, self.DefTerrains[terrain_id]))
         ##for i in range(20):
         ##    self._log_.info("PATCH id: {} with near:{} and far: {}".format(i, self.Patches[i].near, self.Patches[i].far))
         rwyPatch = XPLNEpatch(1, 0.0, -1.0, rwyApv[0][0], terrain_id) ##use pool index of first rwyAborder vertex as
-        rwyPatch.cmds.append( [1, rwyApv[0][0] ] ) #selection of poolIndex has to be set always as first command ### TBD_ to be optimized that not twice set when created and again in cmds
-        for i in range(1, len(rwyApv)):
-            ################################ TBD: always check to insert in clockwise order !!!!!!!!! ################# TBD ########### TBD ###########
+        rwyPatch.cmds.append( [1, rwyApv[0][0] ] ) #selection of poolIndex has to be set always as first command ### TBD: to be optimized that not twice set when created and again in cmds
+        for i in range(1, len(rwyApv)): ##### ATTENTION: Only works correct if both long sides have now same number of vertices !!! to be checked, see also comment above #############
+            ################################ TBD: always check to insert in clockwise order !!!!!!!!! ################# TBD ########### TBD ###################################################
             rwyPatch.trias.append([ rwyApv[i-1], rwyApv[i], rwyBpv[i-1] ])
             rwyPatch.trias.append([ rwyBpv[i-1], rwyApv[i], rwyBpv[i] ])
+        #Now insert vertices on buttom in first tria of runway ################ NEW 4 ########## TO BE TESTED !!!!! 
+        self._log_.info("INSERT VERTICES ON BUTTOM OF RUNWAY:")
+        rwyPatch.trias.remove([rwyApv[0], rwyApv[1], rwyBpv[0]]) #remove first tria which is replaced below by new inserted trias for button vertices
+        previousVonShoulder = rwyBpv[0]
+        for k in sorted(dictShoulder[0].keys()):
+            if k >= 0.01: #overjumps first corner of rwy on buttom, this is already in previousVonShoulder
+                rwyPatch.trias.append([ previousVonShoulder, dictShoulder[0][k], rwyApv[1] ])
+                previousVonShoulder = dictShoulder[0][k]
+                #assumes that last k is key to second corner of runway button
+        #Now insert vertices on top in last tria of runway ############### NEW 4 ########## TO BE TESTED !!!!! 
+        self._log_.info("INSERT VERTICES ON TOP OF RUNWAY:")
+        rwyPatch.trias.remove([rwyBpv[-2], rwyApv[-1], rwyBpv[-1]]) #remove last tria which is replaced below by new inserted trias for button vertices
+        previousVonShoulder = rwyApv[-1]
+        for k in sorted(dictShoulder[2].keys()):
+            if k >= 0.01: #overjumps first corner of rwy on buttom, this is already in previousVonShoulder
+                rwyPatch.trias.append([ previousVonShoulder, dictShoulder[2][k], rwyBpv[-2] ])
+                previousVonShoulder = dictShoulder[2][k]
+                #assumes that last k is key to second corner of runway buton                
         rwyPatch.trias2cmds()
         self._setPatchBoundary_(rwyPatch)
         self.Patches.append(rwyPatch)
-        ### TBD1: When inserting Vertices into pools by functions above do it in new pools wiht adapted scaling to allow millimeter height.
-        ### TBD2: Allow definition of a new terrain like gras for airport
-        return verticesOnShoulder_A.union(verticesOnShoulder_B) ### TBD: return also vertices on buttom and top line of RWY
+        return verticesOnShoulder[1].union(verticesOnShoulder[3], verticesOnShoulder[0], verticesOnShoulder[2]) #also include vertices of buttom/top to rwy vertices    #### NEW 4 ######
 
-    def cutRwyProfileInMeshOLD(self, rwy, interval=20): ###NEW###### but privious version to be removed ##########
-        rwyshoulderA = []
-        ### TBD: insert distances for existing vertices in shoulder A also in shoulder B and vice versa
-        ### TBD: Insert Vertices in dict/list in mesh at their coordinates
-        ### TBD: Insert Shoulder B + ends of RWY
-        ### TBD: Remove all Trias inside/building RWY
-        ### TBD2: Insert Trias between interval points using elevation given by spline interpolation
-        ### TBD2: When inserting Vertices into pools by functions above do it in new pools wiht adapted scaling to allow millimeter height.
-        #self._log_.info("*** Points sorted on RWY by distance: {}".format(sorted(dictShoulder_A.keys())))
-        rwyshoulderA = getPointsOnSegment (rwy[1], rwy[2], interval)
-        rwyshoulderB = getPointsOnSegment (rwy[0], rwy[3], interval)
-        border_vertices = set()
-        for i in range(len(rwyshoulderA) - 1):
-            #for v in self.cutEdges(rwyshoulderA[i], rwyshoulderB[i], accuracy):
-            #    border_vertices.add(v)
-            #for v in self.cutEdges(rwyshoulderB[i], rwyshoulderB[i+1], accuracy):
-            #    border_vertices.add(v)                
-            #for v in self.cutEdges(rwyshoulderB[i+1], rwyshoulderA[i], accuracy):
-            #    border_vertices.add(v)
-            #for v in self.cutEdges(rwyshoulderA[i], rwyshoulderA[i+1], accuracy):
-            #    border_vertices.add(v)
-            vlen = len(border_vertices)
-            for v in self.insertVertex(rwyshoulderA[i], accuracy):
-                border_vertices.add(v)
-                #self._log_.info("+++ Added coordinates      {}".format(self.V[v[0]][v[1]])) ####### JUST FOR CHECK ### TO BE REMOVED !! ###
-            self._log_.info("+++++ Vertex {} added into the mesh on RWY side A caused {} new verices:".format(rwyshoulderA[i], len(border_vertices) - vlen))
-            vlen = len(border_vertices)
-            for v in self.insertVertex(rwyshoulderB[i], accuracy):
-                border_vertices.add(v)
-            self._log_.info("+++++ Vertex {} added into the mesh on RWY side B caused {} new verices.".format(rwyshoulderA[i], len(border_vertices) - vlen))
-        #for v in self.cutEdges(rwyshoulderA[-1], rwyshoulderB[-1], accuracy):
-        #    border_vertices.add(v)
-        for v in self.insertVertex(rwyshoulderA[-1], accuracy):
-            border_vertices.add(v)
-        for v in self.insertVertex(rwyshoulderB[-1], accuracy):
-            border_vertices.add(v)        
-        inner_vertices = set()
-        l = self.PatchesInArea(*self.BoundingRectangle(rwy))
-        for p in l:
-            for t in p.trias:
-                vt = self.TriaVertices(t)
-                for i in range(3):
-                    if PointInPoly(vt[i], rwy):
-                        inner_vertices.add((t[i][0], t[i][1]))
-        self._log_.info("Cutting Runway done. Now there are {} vertices inside and at the border of the Polygon in the mesh.".format(len(border_vertices.union(inner_vertices))))
-        return border_vertices.union(inner_vertices)        
-        
-            
+      
     def getElevation(self, x, y, z = -32768): #gets Elevation at point (x,y) from raster grid Elevation
         if int(z) != -32768: #in case z vertex is different from -32768 than this is the right height and not taken from raster
             return z
@@ -1427,9 +1299,6 @@ class XPLNEDSF:
 
     
     def write(self, file): #writes data to dsf file with according file-name
-        for p in self.Patches: ##### NEW 3 ########## JUST ERROR CHECK ################ TO BE REMOVED ###################################
-            p.trias = p.triangles()  
-        self.checkTriasOutOfRange() ##### NEW 3 ########## JUST ERROR CHECK ################ TO BE REMOVED ###################################
         self._progress_[0] = 0
         self._progress_[1] = 0 #keep original file length as goal to reach in progress[2]
         self._packAtoms_() #first write values of Atom strings that below will written to file   
