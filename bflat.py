@@ -3,7 +3,7 @@
 #
 # bflat.py
 #        
-bflat_VERSION = "0.3.2 exp"
+bflat_VERSION = "0.3.3 exp"
 # ---------------------------------------------------------
 # Python GUI module for flattening a X-Plane mesh at a given airport.
 #
@@ -190,6 +190,7 @@ def getRunwayBounds (p1, p2, w):
     degree_dist_at_equator = 111120 #for longitude (or 111300?)
     lat_degree_dist_average = 111000
     degree_dist_at_lat = cos (radians(p1[0])) * degree_dist_at_equator
+    ############################################################################# TBD: CHECK IF CORRECT WITH NORTH-SOUTH / EAST-WEST RUNWAYS also below for clockwise order !!! ################
     if round (p1[1], 6) == round (p2[1], 6): #runway exactly east-west direction
         dx = 0   #difference for longitute in meters to reach corner from center end
         dy = w/2 #difference for latitude in meters to reach corner from center end
@@ -197,16 +198,22 @@ def getRunwayBounds (p1, p2, w):
         dx = w/2
         dy = 0
     else: 
-        m = -1 / ((p2[0] - p1[0]) / (p2[1] - p1[1])) #gradient of perpendicular line Steigung der Senkrechten
+        m = -1 / ((p2[0] - p1[0]) / (p2[1] - p1[1])) #gradient of perpendicular line
         dx = sqrt( ( (w/2)**2) / (1 + m**2)) 
         dy = dx * m 
     dx /= degree_dist_at_lat #convert meters in longitute coordinate difference at geographical latitude
     dy /= lat_degree_dist_average #convert meters in latitude coordinate difference 
     l = []
-    l.append([round(p1[1] - dx, 8), round(p1[0] - dy, 8)])
-    l.append([round(p1[1] + dx, 8), round(p1[0] + dy, 8)])
-    l.append([round(p2[1] + dx, 8), round(p2[0] + dy, 8)])
-    l.append([round(p2[1] - dx, 8), round(p2[0] - dy, 8)])
+    if (p1[1] <= p2[1] and dy >= 0) or (p1[1] > p2[1] and dy < 0): #make sure to always insert in clockwise order
+        l.append([round(p1[1] - dx, 8), round(p1[0] - dy, 8)]) #buttom corner1
+        l.append([round(p1[1] + dx, 8), round(p1[0] + dy, 8)]) #buttom corner2
+        l.append([round(p2[1] + dx, 8), round(p2[0] + dy, 8)]) #top corner1
+        l.append([round(p2[1] - dx, 8), round(p2[0] - dy, 8)]) #top corner2
+    else: ##### TBD: easier just to multiply dx and dy with -1 !!??? ####################
+        l.append([round(p1[1] + dx, 8), round(p1[0] + dy, 8)])
+        l.append([round(p1[1] - dx, 8), round(p1[0] - dy, 8)])
+        l.append([round(p2[1] - dx, 8), round(p2[0] - dy, 8)])
+        l.append([round(p2[1] + dx, 8), round(p2[0] + dy, 8)])
     l.append(l[0]) #add first corner to form closed loop
     return l
  
@@ -251,42 +258,6 @@ def interpolatedRWYelevation(rwys, p, rwySpline): #based on runway it's spline p
     elev = interpolate.splev(d, rwySpline)  ### to be done: error checking
     return numpy.asscalar(elev)
 
-#def moveSubmPools(dsf, V):
-    #moves vertices V to other Pools allowing submeter elevation
-    ### TBD: insert new vertices directly in SubmPools and check here first if they are already in such a pool
-    ###### TBD: remove all not required vertices from old pools but this requires check in complete dsf
-    #logdata = [] #for testing info returned for logfile
-    #smp = {} #dictionary containing the new poolIDs for different size of planes
-    #newV = {} #dictionary mapping old vertices in V to the ones in the new submPool
-    #for v in V:
-    #    planes = len(dsf.V[v[0]][v[1]]) #number of planes v has
-    #    if planes not in smp:
-    #        dsf.V.append(dsf.V[v[0]][v[1]])
-    #        smp[planes] = len(dsf.V) - 1 #this is now new poolID for submeter Vertices with len() planes
-    #        dsf.Scalings.append(dsf.Scalings[v[0]]) #use Scaling for v in old Pool as base for new Pool
-    #        dsf.Scalings[-1][2] = [3276.75, 0] #set scaling for elevation from 0m to about 3.200m with 5cm steps (65535*0.05=3276.75)
-    #        ##### TBD: allow flexible scaling dependent of elevation of v, including negative values and above 4.000
-    #        newV[(v[0], v[1])] = (len(dsf.V) - 1, len(dsf.V[poolID]) - 1)
-    #        logdata.append("New Pool with ID {} and Scaling with values: {}".format(len(dsf.V) - 1, dsf.Scalings[-1]))
-    #    else:
-    #        poolID = smp[planes]
-    #        for i in range(planes):
-    #            if i != 2: #not checking elevation plane as this will be new
-    #                if dsf.Scalings[poolID][i][0] != dsf.Scalings[v[0]][i][0] or dsf.Scalings[poolID][i][1] != dsf.Scalings[v[0]][i][1]:
-    #                    logdata.append("ERROR: New Scaling does not fit for vertex {} and it's scaling: {}".format(v, dsf.Scalings[v[0]]))
-    #                    ### TBD: Handle error in future by inserting new SubmPools for that new Scalin
-    #        dsf.V[poolID].append(dsf.V[v[0]][v[1]])
-    #        newV[(v[0], v[1])] = (poolID, len(dsf.V[poolID]) - 1)
-    #for p in dsf.PatchesInArea(*dsf.BoundingRectangle(V)): #now update all trias in area of V with reference to new Pools
-    #    for t in p.trias:
-    #        for i in range(3):
-    #            if (t[i][0], t[i][1]) in newV:
-    #                t[i] = newV[(t[i][0], t[i][1])]
-    #    p.trias2cmds()
-    #for i in range(len(V)):
-    #    logdata.append("Move vertex {} to {}.".format(V[i], newV[(V[i][0], V[i][1])]))
-    #    V[i] = newV[(V[i][0], V[i][1])]
-    #return V, logdata #list of vertices with updated poolIDs is returned
 
 def moveSubmPools(dsf, V):
     newV = {} #dictionary mapping old vertices in V to the ones in the new submPool
@@ -615,25 +586,27 @@ class bflatGUI:
                         coords.update(cs)                        
                     else: #cut also runways in segments to allow sloped profile    #### NEW 2 ####
                         #### TBD: Allow this option only when interpolation/numpy packages are loaded
-                        #### TBD: Adapt code that it runs for serveral runways not just one
-                        self.vertices = self.vertices.union(self.dsf.cutRwyProfileInMesh(boundary, 20)) # tbd: choose segment length from GUI, also accuracy ??
-                        vs, cs = getAllVerticesForCoords(self.dsf, self.vertices)
+                        RWYvertices = {} #set of vertices for the current runway  ######### NEW 4: replaces the self.vertices below to allow multiple runways #####
+                        newRWYvertics = [] #list of the new vertices after been inserted in submeter Pool    ######## NEW 4 ##########
+                        RWYvertices = self.dsf.cutRwyProfileInMesh(boundary, 20)   #### NEW 4 ########
+                        vs, cs = getAllVerticesForCoords(self.dsf, RWYvertices)
                         coords.update(cs)
                         rwySpline, loginfo = interpolateRWYprofile(self.runways, self.dsf, self.config.text) #tbd: update for several runways ######
                         for info in loginfo: log.info(info) #tbd: set higher loglevel in future; also below!!! ############
-                        for v in self.vertices: #updates heigt of vertices based on spline profile
+                        for v in RWYvertices: #updates heigt of vertices based on spline profile
                             newelev = interpolatedRWYelevation(self.runways, (self.dsf.V[v[0]][v[1]][0], self.dsf.V[v[0]][v[1]][1]), rwySpline)
                             newelev = round(newelev, 3)
                             dist = distance((self.dsf.V[v[0]][v[1]][0], self.dsf.V[v[0]][v[1]][1]), (self.runways[0][0][1], self.runways[0][0][0])) #### JUST FOR TEST, works just for first RWY !!!!!
                             dist = round(dist)
                             log.info("Vertex {} with coordinates {} at approx distance {}m set to elevation {}m.".format(v, (self.dsf.V[v[0]][v[1]][0], self.dsf.V[v[0]][v[1]][1]), dist, newelev))
                             self.dsf.V[v[0]][v[1]][2] = newelev
-                        for v in self.vertices:
+                        for v in RWYvertices:
                             log.info("Old vertex {} is: {}".format(v, self.dsf.V[v[0]][v[1]]))
-                        self.vertices, logdata = moveSubmPools(self.dsf, self.vertices) #moves vertices to new pool allowing submeter elevation
+                        newRWYvertices, logdata = moveSubmPools(self.dsf, RWYvertices) #moves vertices to new pool allowing submeter elevation #### WARNING: Returns list of dictionary values, no set !!!!!
                         for data in logdata:
                             log.info(data)
-                        for v in self.vertices:
+                        for v in newRWYvertices:
+                            self.vertices.add(v)  #add new vertices list element to self.vertices set for further processing  #### NEW 4 #### 
                             log.info("New vertex {} is: {}".format(v, self.dsf.V[v[0]][v[1]]))
                 else:
                     vs, cs = vertices_of_boundary_intersecting_trias(self.dsf, boundary)
@@ -655,9 +628,6 @@ class bflatGUI:
                 self.newdsf_entry.insert(0, filename)
                 self.bakdsf_entry.delete(0, END)
                 self.bakdsf_entry.insert(0, filename + ".bak")
-        self.dsf.checkTriasOutOfRange() ######### NEW 3 #### CHECK TO BE REMOVED LATER #########################################
-        ###log.info("   Pool 129 has {} elements.".format(len(self.dsf.V[129])))
-        ###log.info("   Pool 132 has {} elements.".format(len(self.dsf.V[132])))
         self.current_action = None
 
     def write_kml(self):
