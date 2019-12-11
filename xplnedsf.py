@@ -1,6 +1,6 @@
 #******************************************************************************
 #
-# xplnedsf.py        Version 0.3.3
+# xplnedsf.py        Version 0.3.4
 # ---------------------------------------------------------
 # Python module for reading and writing X_Plane DSF files.
 #
@@ -295,7 +295,14 @@ class XPLNEDSF:
             l.append(atom[i:j].decode("utf-8"))
             i = j + 1
         return l
-
+    
+    def _PutStrings_(self, d): #encodes strings in dictionary d to binary to be stored in updated atom   ########## NEW 5 #############
+        b = b'' #binary encoding to be returned
+        for i in range(len(d)):
+            b += d[i].encode("utf-8")
+            b += b'\x00'
+        return b
+            
             
     def _extractProps_(self): #extracts the properties of the dsf file stored in atom PROP within atom HEAD; stores them to dictionary Properties
         l = self._GetStrings_(self._Atoms_['PORP'])
@@ -304,6 +311,10 @@ class XPLNEDSF:
 
      
     def _extractDefs_(self): #extracts the definition (DEFN) atoms TERT, OBJT, POLY, NETW, DEMN and stores them in dictionarys
+        ############################################## NEW 5: OPEN: What happens if one of the sub atoms is missing, possible, empty ????? ##########
+        self._log_.info("Atom TRET: {}".format(self._Atoms_['TRET']))  ##### TESTING #####
+        self._log_.info("Atom TJBO: {}".format(self._Atoms_['TJBO']))  ##### TESTING #####
+        self._log_.info("Atom WTEN: {}".format(self._Atoms_['WTEN']))  ##### TESTING #####
         l = self._GetStrings_(self._Atoms_['TRET'])
         self.DefTerrains = dict(zip(range(len(l)), l))
         l = self._GetStrings_(self._Atoms_['TJBO'])
@@ -315,7 +326,18 @@ class XPLNEDSF:
         l = self._GetStrings_(self._Atoms_['NMED'])
         self.DefRasters = dict(zip(range(len(l)), l))
         self._updateProgress_(self._TopAtomLength_('NFED'))
+
         
+    def _encodeDefs_(self): #encodes the definition dictionaries in dsf object to (DEFN) atoms     ########## NEW 5 #############
+        self._Atoms_['TRET'] = self._PutStrings_(self.DefTerrains)
+        self._Atoms_['TJBO'] = self._PutStrings_(self.DefObjects)
+        self._Atoms_['YLOP'] = self._PutStrings_(self.DefPolygons)
+        self._Atoms_['WTEN'] = self._PutStrings_(self.DefNetworks)
+        self._Atoms_['NMED'] = self._PutStrings_(self.DefRasters)
+        self._log_.info("Atom TRET: {}".format(self._Atoms_['TRET']))  ##### TESTING #####
+        self._log_.info("Atom TJBO: {}".format(self._Atoms_['TJBO']))  ##### TESTING #####
+        self._log_.info("Atom WTEN: {}".format(self._Atoms_['WTEN']))  ##### TESTING #####
+        ###### TBD: other definitions #########################
 
         
     def _extractPools_(self, bit = 16):  
@@ -793,7 +815,8 @@ class XPLNEDSF:
     def _packAtoms_(self): #starts all functions to write all variables to strings (for later been written to file)
         self._log_.info("Preparing data to be written to file.")
         self._log_.info("This version only applies changes to POOL, CMDS and SCAL atoms (all other atoms inc. SC32 are written as read)!")
-        self._scaleV_(16, True) #de-scale again
+        self._encodeDefs_() ### TBD: Properties
+        self._scaleV_(16, True) #de-scale again       ############### TBD: SC32 scaling !! ##############
         self._encodePools_()
         self._packAllScalings_()
         self._packCMDS_()
@@ -1020,7 +1043,7 @@ class XPLNEDSF:
         # retruned vertices have to be set to required elevation
         ## TBD normal vectors of these vertices need to be updated if no raster is existent / used
         
-    def cutRwyProfileInMesh(self, rwy, interval=20): ###NEW######
+    def cutRwyProfileInMesh(self, rwy, terrain, interval=20, accuracy=1): ###NEW######  ### NEW 5 with Terrain ###   ### TBD: Have interval and accuracy flexible!!! ###
         #cuts runway in mesh with intersections of runway every interval meter; allows to set granular elevation
         def add2profile(V, shoulderStart, shoulderV, dictV): #adds vertices in V to shoulder and dict    #### NEW3 ####
             for v in V:
@@ -1030,7 +1053,6 @@ class XPLNEDSF:
                 self._log_.info("+++ Added coordinates for RWY current border {}".format(self.V[v[0]][v[1]])) ####### JUST FOR CHECK ### TO BE REMOVED !! ###
                 
         self._log_.info("Cutting Runway with boundary {} into the mesh, having intersecitons every {} m.".format(rwy, interval))
-        accuracy = 1 ######### TBD check if 1m accuracy is right value for cutting RWY Boundary --> TBD: have it variabl in future ##################
         verticesOnShoulder = [set(), set(), set(), set()] #list of sets, that will inclued all verteices of shoulder per side of RWY
         dictShoulder = [{}, {}, {}, {}] #list of dictonaries with key is distance from point RWY-side-start-Point and pool/vertex id to a vertex as value
         ### IMPORTANT: Order of lists are as order of rwy-corners: rwy button, long side A, rwy top, long side B
@@ -1122,10 +1144,15 @@ class XPLNEDSF:
             p.trias2cmds() #Update Commands accordingly
         terrain_id = 0 #find terrain id for new patch that includes trias for runway
         ############ TBD: Allow flexible defintion of terrain that should be used for runway, and add it if not already in current list ##################################################
-        while terrain_id < len(self.DefTerrains) and self.DefTerrains[terrain_id] != "lib/g10/terrain10/coni_tmp_rain_sflat.ter" and self.DefTerrains[terrain_id] != "lib/g10/terrain10/grass_tmp_wet_fl.ter":
-            self._log_.info("      Terrain id: {} named:{}.".format(terrain_id, self.DefTerrains[terrain_id]))
-            terrain_id += 1        
-        self._log_.info("TERRAIN ID FOUND IS: {} named:{}.".format(terrain_id, self.DefTerrains[terrain_id]))
+        ### while terrain_id < len(self.DefTerrains) and self.DefTerrains[terrain_id] != "lib/g10/terrain10/coni_tmp_rain_sflat.ter" and self.DefTerrains[terrain_id] != "lib/g10/terrain10/grass_tmp_wet_fl.ter":
+        while terrain_id < len(self.DefTerrains) and self.DefTerrains[terrain_id] != terrain:
+            self._log_.info("      Terrain id: {} named:{}.".format(terrain_id, self.DefTerrains[terrain_id]))  ### TESTING #####
+            terrain_id += 1
+        if terrain_id == len(self.DefTerrains):
+            self._log_.info("Terrain {} for runway profile not in current list. Will be added with id {}!".format(terrain, terrain_id))
+            self.DefTerrains[terrain_id] = terrain
+        else:
+            self._log_.info("Terrain {} for runway profile found in current list with id: {}.".format(self.DefTerrains[terrain_id], terrain_id))
         ##for i in range(20):
         ##    self._log_.info("PATCH id: {} with near:{} and far: {}".format(i, self.Patches[i].near, self.Patches[i].far))
         rwyPatch = XPLNEpatch(1, 0.0, -1.0, rwyApv[0][0], terrain_id) ##use pool index of first rwyAborder vertex as
