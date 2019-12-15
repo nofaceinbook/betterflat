@@ -3,7 +3,7 @@
 #
 # bflat.py
 #        
-bflat_VERSION = "0.3.4 exp"
+bflat_VERSION = "0.3.5 exp"
 # ---------------------------------------------------------
 # Python GUI module for flattening a X-Plane mesh at a given airport.
 #
@@ -606,9 +606,13 @@ class bflatGUI:
                         coords.update(cs)                        
                     else: #cut also runways in segments to allow sloped profile    #### NEW 2 ####
                         #### TBD: Allow this option only when interpolation/numpy packages are loaded
+                        for i in range(len(self.dsf.Scalings)):          ############## ERROR CHECKING - TO BE REMOVED ###############   #### NEW 6 ####
+                            log.info("Scaling {}: {}".format(i, self.dsf.Scalings[i]))
                         RWYvertices = {} #set of vertices for the current runway  ######### NEW 4: replaces the self.vertices below to allow multiple runways #####
                         newRWYvertics = [] #list of the new vertices after been inserted in submeter Pool    ######## NEW 4 ##########
                         RWYvertices = self.dsf.cutRwyProfileInMesh(boundary, self.config.terrain, self.config.interval, self.config.accuracy)  ### NEW 5 interval and accuracy flexible   #### NEW 4 ########
+                        for i in range(len(self.dsf.Scalings)):          ############## ERROR CHECKING - TO BE REMOVED ###############   #### NEW 6 ####
+                            log.info("Scaling {}: {}".format(i, self.dsf.Scalings[i]))                        
                         vs, cs = getAllVerticesForCoords(self.dsf, RWYvertices)
                         coords.update(cs)
                         rwySpline, loginfo = interpolateRWYprofile(self.runways, self.dsf, boundNumber, self.config.text) #tbd: update for several runways ######
@@ -628,6 +632,8 @@ class bflatGUI:
                         for v in newRWYvertices:
                             self.vertices.add(v)  #add new vertices list element to self.vertices set for further processing  #### NEW 4 #### 
                             log.info("New vertex {} is: {}".format(v, self.dsf.V[v[0]][v[1]]))
+                        for i in range(len(self.dsf.Scalings)):          ############## ERROR CHECKING - TO BE REMOVED ###############   #### NEW 6 ####
+                            log.info("Scaling {}: {}".format(i, self.dsf.Scalings[i]))
                 else:
                     vs, cs = vertices_of_boundary_intersecting_trias(self.dsf, boundary)
                     self.vertices = self.vertices.union(vs)
