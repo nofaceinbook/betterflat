@@ -1,6 +1,6 @@
 #******************************************************************************
 #
-# xplnedsf.py        Version 0.3.5
+# xplnedsf.py        Version 0.3.6
 # ---------------------------------------------------------
 # Python module for reading and writing X_Plane DSF files.
 #
@@ -1071,6 +1071,9 @@ class XPLNEDSF:
                 self._log_.info("+++ Added coordinates for RWY current border {}".format(self.V[v[0]][v[1]])) ####### JUST FOR CHECK ### TO BE REMOVED !! ###
                 
         self._log_.info("Cutting Runway with boundary {} into the mesh, having intersecitons every {} m.".format(rwy, interval))
+        if accuracy > 1.5: #don't allow too high accuracy as this causes errors in profile generation    #### NEW 7 ####
+            self._log_.warning("Accuracy {}m is too high for profile generation. Reduced to 1m!".format(accuracy))
+            accuracy = 1      
         verticesOnShoulder = [set(), set(), set(), set()] #list of sets, that will inclued all verteices of shoulder per side of RWY
         dictShoulder = [{}, {}, {}, {}] #list of dictonaries with key is distance from point RWY-side-start-Point and pool/vertex id to a vertex as value
         ### IMPORTANT: Order of lists are as order of rwy-corners: rwy button, long side A, rwy top, long side B
@@ -1263,18 +1266,29 @@ class XPLNEDSF:
         if not (int(self.Properties["sim/south"]) <= y <= int(self.Properties["sim/north"])):
             self._log_.error("Cannot get elevation as y coordinate is not within boundaries!!!")
             return None
-        ### THIS VERSION IS ASSUMING THAT ELEVATION RASTER IS THE FIRST RASTER-LAYER (index 0), if it is not called "elevation" a warning is raised ###
-        ################################# TBD: Take elevation in that case from Trias in which coordinates are in !!!!!!!!!!!!!!!!!!!! #############################
-        if self.DefRasters[0] != "elevation":
-            self._log_.warning("Warning: The first raster layer is not called elevation, but used to determine elevation!")
-        x = abs(x - int(self.Properties["sim/west"])) * (self.Raster[0].width - 1) # -1 from widht required, because pixels cover also boundaries of dsf lon/lat grid
-        y = abs(y - int(self.Properties["sim/south"])) * (self.Raster[0].height - 1) # -1 from height required, because pixels cover also boundaries of dsf lon/lat grid
-        if self.Raster[0].flags & 4: #when bit 4 is set, then the data is stored post-centric, meaning the center of the pixel lies on the dsf-boundaries, rounding should apply
-            x = round(x, 0)
-            y = round(y, 0)
-        x = int(x) #for point-centric, the outer edges of the pixels lie on the boundary of dsf, and just cutting to int should be right
-        y = int(y)
-        return (self.Raster[0].data[x][y])  
+        if len(self.DefRasters) == 0: #No raster defined, use elevation from trias  #### NEW 7 ####
+            self._log_.info("dsf includes no raster, elevation taken from trias!")  #### ERROR CHECKING - TO BE REMOVED ###
+            l = self.PatchesInArea(y, y, x, x)  #find all patches relevant for point (x, y)
+            for p in l:
+                for t in p.trias:
+                    tv = self.TriaVertices(t)
+                    if isPointInTria([x, y], tv):
+                        l0, l1 = PointLocationInTria([x, y], tv)
+                        elev = self.V[t[2][0]][t[2][1]][2] + l0 * (self.V[t[0][0]][t[0][1]][2] - self.V[t[2][0]][t[2][1]][2])  + l1 * (self.V[t[1][0]][t[1][1]][2] - self.V[t[2][0]][t[2][1]][2]) #elvation is plane 2
+                        self._log_.info("Elevation at x: {}  y: {}  is  {}m.".format(x, y, elev))  #### ERROR CHECKING - TO BE REMOVED ###
+                        return elev
+            self._log_.error("No triangle in mesh for position x: {}  y: {}  found in order to retrieve elevation!".format(x, y))  
+        else: # use raster to get elevation; THIS VERSION IS ASSUMING THAT ELEVATION RASTER IS THE FIRST RASTER-LAYER (index 0), if it is not called "elevation" a warning is raised ###
+            if self.DefRasters[0] != "elevation":
+                self._log_.warning("Warning: The first raster layer is not called elevation, but used to determine elevation!")
+            x = abs(x - int(self.Properties["sim/west"])) * (self.Raster[0].width - 1) # -1 from widht required, because pixels cover also boundaries of dsf lon/lat grid
+            y = abs(y - int(self.Properties["sim/south"])) * (self.Raster[0].height - 1) # -1 from height required, because pixels cover also boundaries of dsf lon/lat grid
+            if self.Raster[0].flags & 4: #when bit 4 is set, then the data is stored post-centric, meaning the center of the pixel lies on the dsf-boundaries, rounding should apply
+                x = round(x, 0)
+                y = round(y, 0)
+            x = int(x) #for point-centric, the outer edges of the pixels lie on the boundary of dsf, and just cutting to int should be right
+            y = int(y)
+            return (self.Raster[0].data[x][y])  
 
 
     def getPolys(self, type): #returns all polygons of one type (numbered as in DefPolys) in a list and for each poly parameter following all vertices as reference [poolId, index]
