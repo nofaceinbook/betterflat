@@ -3,7 +3,7 @@
 #
 # bflat.py
 #        
-bflat_VERSION = "0.3.5 exp"
+bflat_VERSION = "0.3.6 exp"
 # ---------------------------------------------------------
 # Python GUI module for flattening a X-Plane mesh at a given airport.
 #
@@ -232,7 +232,8 @@ def getRunwayBounds (p1, p2, w):
 def interpolateRWYprofile(rwys, dsf, rwyNum, defintion=""): #calculates the interpolated rwy profiles         ############### NEW2 ###################
     #definition could include profile defined in "0@98.2 180@97.4 ...." where value before @ is distance and after elevation, use ";" to seperate multiple rwy ### TBD #######
     #if no defenition is given the raster is used to calculate elevation  ##### TBD: check that raster definition is present in dsf !!! ##########
-    loginfo = ["Interpolating runway profile for runway number {}.".format(rwyNum)]##### JUST FOR TESTING STRING WITH RETURNED LOG INFO
+    loginfo = ["Interpolating runway profile for runway number {}".format(rwyNum)]##### JUST FOR TESTING STRING WITH RETURNED LOG INFO
+    logprofile = "" #profile as text-definiton in format as in input field    ##### NEW 7 ######
     rwy = rwys[rwyNum] ###### NEW 5 - runway is selected from severl ones ######
     start = (rwy[0][1], rwy[0][0]) #start coordinates rwy
     end = (rwy[1][1], rwy[1][0]) #end coordinates rwy
@@ -240,23 +241,26 @@ def interpolateRWYprofile(rwys, dsf, rwyNum, defintion=""): #calculates the inte
     x_points = []
     y_points = []
     if not "@" in defintion: #seems that defintion includes no elevation values in required format so use elevation given by raster in dsf
+        loginfo.append("Based on raster elevation of dsf the following profile was generated (distance-from-rwy-start@elevation in m):")
         for d in range(-100, int(l)+101, 100): #starting before and ending after rwy #### TBD: variable width for definition points
             p = (start[0] + d/l * (end[0] - start[0]), start[1] + d/l * (end[1] - start[1]))
             x_points.append(d)
             y_points.append(dsf.getElevation(p[0], p[1]))
-            loginfo.append("At distance {} with coords {} elevation from dsf raster is: {}".format(d, p, y_points[-1] ))
+            logprofile += "{}@{} ".format(d, round(y_points[-1], 2))
     else: #use defintion for setting profile
         runwayValues = defintion.split(";")
         if len(runwayValues) - 1 >  rwyNum:
             loginfo.append("ERROR: Definition of profile is not for all runways. Please enter profiles for all runway seperated with semicolon!")
             return None, loginfo ###### TBD: User-friendly output in GUI
+        loginfo.append("Based on input text-defintion following profile is created (distance-from-rwy-start@elevation in m):")
+        logprofile = runwayValues
         vpairs = runwayValues[rwyNum].split()
         for v in vpairs:
             vx, vy = v.split("@")
             x_points.append(float(vx))
             y_points.append(float(vy))
-            loginfo.append("At distance {} elevation from given definition is: {}".format(vx, vy))
     rwySpline = interpolate.splrep(x_points, y_points, s=12) ######### TBD: smooth factor just fixed test value, has to be variable !!!! ###########
+    loginfo.append(logprofile)
     return rwySpline, loginfo
 
 
