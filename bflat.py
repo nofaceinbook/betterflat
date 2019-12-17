@@ -3,7 +3,7 @@
 #
 # bflat.py
 #        
-bflat_VERSION = "0.3.6 exp"
+bflat_VERSION = "0.3.7 exp"
 # ---------------------------------------------------------
 # Python GUI module for flattening a X-Plane mesh at a given airport.
 #
@@ -73,6 +73,7 @@ def ConfigMenu(win, config):
         config.isprofile = profileType.get()
         config.text = text_entry.get("1.0",END)
         config.terrain = terrain_entry.get()
+        config.isTerrainReplaced = replaceTerrainType.get()
         config.interval = float(interval_entry.get())
     configwin = Toplevel(win)
     toplabel = Label(configwin, anchor=W, justify=LEFT, text="Change configurations for cut option:").grid(row=0, column=0, columnspan=2, pady=10, padx=10)
@@ -86,22 +87,26 @@ def ConfigMenu(win, config):
     terrain_entry = Entry(configwin, width=40)
     terrain_entry.grid(row=2, column=1, sticky=W)
     terrain_entry.insert(0, config.terrain)
+    replaceTerrainType = IntVar() # 1 if terrain should be used to replace existing ones, 0 if not
+    replaceTerrainType.set(config.isTerrainReplaced)
+    replaceTerrainCB = Checkbutton(configwin, text="Replace terrain under boundary/rwy", variable=replaceTerrainType)
+    replaceTerrainCB.grid(row=3, column=0, sticky=E, pady=4)
     profileType = IntVar() # 1 if profile in rwys should be cut, 0 if not
     profileType.set(config.isprofile)
-    profileCB = Checkbutton(configwin, text="Cut Runway Profile", variable=profileType)
-    profileCB.grid(row=3, column=0, sticky=E, pady=4)
-    text_label = Label(configwin, anchor=W, justify=LEFT, text="Profile Definition (if empty raster is used):").grid(row=4, column=0, columnspan=2, pady=4, padx=10)
+    profileCB = Checkbutton(configwin, text="Cut Runway Profile (always uses terrain above)", variable=profileType)
+    profileCB.grid(row=4, column=0, sticky=E, pady=4)
+    text_label = Label(configwin, anchor=W, justify=LEFT, text="Profile Definition (if empty raster or tria elevation of dsf is used):").grid(row=5, column=0, columnspan=2, pady=4, padx=10)
     text_entry = Text(configwin, height=2, width=60)
-    text_entry.grid(row=5, column=0, columnspan=2, padx=10, pady=4)
+    text_entry.grid(row=6, column=0, columnspan=2, padx=10, pady=4)
     text_entry.insert(END, config.text)
     interval_label = Label(configwin, text="Profile intervals (in m):")
-    interval_label.grid(row=8, column=0, pady=4, sticky=E)
+    interval_label.grid(row=9, column=0, pady=4, sticky=E)
     interval_entry = Entry(configwin, width=7)
-    interval_entry.grid(row=8, column=1, sticky=W)
+    interval_entry.grid(row=9, column=1, sticky=W)
     interval_entry.insert(0, config.interval)
     update_button = Button(configwin, text='Update Configuration', command=update_config)
-    update_button.grid(row=9, column=0, pady=4)
-    buttonlabel = Label(configwin, anchor=W, justify=LEFT, text="Changes are only applied when you press update button.\nClose window when done.").grid(row=10, column=0, columnspan=2, pady=10, padx=10)
+    update_button.grid(row=10, column=0, pady=4)
+    buttonlabel = Label(configwin, anchor=W, justify=LEFT, text="Changes are only applied when you press update button.\nClose window when done.").grid(row=11, column=0, columnspan=2, pady=10, padx=10)
 
 def defineLog(logname, logLevelStream='INFO', logLevelFile='INFO', mode='w+'):
     #
@@ -230,8 +235,7 @@ def getRunwayBounds (p1, p2, w):
     return l
  
 def interpolateRWYprofile(rwys, dsf, rwyNum, defintion=""): #calculates the interpolated rwy profiles         ############### NEW2 ###################
-    #definition could include profile defined in "0@98.2 180@97.4 ...." where value before @ is distance and after elevation, use ";" to seperate multiple rwy ### TBD #######
-    #if no defenition is given the raster is used to calculate elevation  ##### TBD: check that raster definition is present in dsf !!! ##########
+    #definition could include profile defined in "0@98.2 180@97.4 ...." where value before @ is distance and after elevation, use ";" to seperate multiple rwy 
     loginfo = ["Interpolating runway profile for runway number {}".format(rwyNum)]##### JUST FOR TESTING STRING WITH RETURNED LOG INFO
     logprofile = "" #profile as text-definiton in format as in input field    ##### NEW 7 ######
     rwy = rwys[rwyNum] ###### NEW 5 - runway is selected from severl ones ######
@@ -263,10 +267,9 @@ def interpolateRWYprofile(rwys, dsf, rwyNum, defintion=""): #calculates the inte
     loginfo.append(logprofile)
     return rwySpline, loginfo
 
-
-def interpolatedRWYelevation(rwys, p, rwySpline): #based on runway it's spline profile, the elevation of a point on the runway is calculated    ############# NEW2 ###########
-    rwy = rwys[0] ###### TBD: for the beginning just profile for one rwy
-    start = (rwy[0][1], rwy[0][0]) #start coordinates rwy
+def interpolatedRWYelevation(rwy, p, rwySpline): #based on runway it's spline profile, the elevation of a point on the runway is calculated    ############# NEW2 ###########
+    #rwy = rwys[0] ###### TBD: for the beginning just profile for one rwy  ### Now correc rwy coordinates are directly coming as argument    #### NEW 7 ####
+    start = (rwy[0][1], rwy[0][0]) #start coordinates rwy 
     end = (rwy[1][1], rwy[1][0]) #end coordinates rwy
     startD = (start[0] - 0.1 * (end[0] - start[0]), start[1] - 0.1 * (end[1] - start[1])) #use starting point 10% of rwy length before to really get value for all points around runway
     endD = (start[0] + 1.1 * (end[0] - start[0]), start[1] + 1.1 * (end[1] - start[1]))   #use end point 10% of rwy length behind to really get value for all points around runway
@@ -381,6 +384,7 @@ class ConfigDetails:
         self.isprofile = 0 #is set to 1 in case the runways will be cut in segements in order to allow profile, 0 for no profile
         self.text = "" #input text to be used e.g. for definition of runway profile
         self.terrain = "lib/g10/terrain10/grass_tmp_sdry_fl.ter" #value used when terrain of mesh trias is replaced, e.g. under runway profile
+        self.isTerrainReplaced = 0 #is set to 1 in case terrain under boundary or runway should be replaced with terrain definition (in case of isprofile = 1 this is always done regardless of this defintion)
         self.interval = 20 #distance of intervals in m in which runway is cut to generate profile
 
 class bflatGUI:
@@ -604,7 +608,10 @@ class bflatGUI:
                 self.window.update()
                 if self.cuttype.get():
                     if not self.config.isprofile: #just cut without inserting segments for runway profile
-                        verticesFromCut = self.dsf.cutPolyInMesh(boundary, self.config.accuracy) #### NEW 5 accuracy flexible defined   ######NEW3 error correction####
+                        if self.config.isTerrainReplaced:
+                            verticesFromCut = self.dsf.cutTerrainInMesh(boundary, self.config.terrain, self.config.accuracy) #### NEW 8 ###
+                        else:
+                            verticesFromCut = self.dsf.cutPolyInMesh(boundary, self.config.accuracy) #### NEW 5 accuracy flexible defined   ######NEW3 error correction####
                         vs, cs = getAllVerticesForCoords(self.dsf, verticesFromCut)  ######NEW3 error correction####
                         self.vertices = self.vertices.union(vs) ######NEW3 error correction####
                         coords.update(cs)                        
@@ -622,7 +629,7 @@ class bflatGUI:
                         rwySpline, loginfo = interpolateRWYprofile(self.runways, self.dsf, boundNumber, self.config.text) #tbd: update for several runways ######
                         for info in loginfo: log.info(info) #tbd: set higher loglevel in future; also below!!! ############
                         for v in RWYvertices: #updates heigt of vertices based on spline profile
-                            newelev = interpolatedRWYelevation(self.runways, (self.dsf.V[v[0]][v[1]][0], self.dsf.V[v[0]][v[1]][1]), rwySpline)
+                            newelev = interpolatedRWYelevation(self.runways[boundNumber], (self.dsf.V[v[0]][v[1]][0], self.dsf.V[v[0]][v[1]][1]), rwySpline)  ### NEW 7: submit correct runway ####
                             newelev = round(newelev, 3)
                             dist = distance((self.dsf.V[v[0]][v[1]][0], self.dsf.V[v[0]][v[1]][1]), (self.runways[0][0][1], self.runways[0][0][0])) #### JUST FOR TEST, works just for first RWY !!!!!
                             dist = round(dist)
