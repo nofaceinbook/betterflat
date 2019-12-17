@@ -1,6 +1,6 @@
 #******************************************************************************
 #
-# xplnedsf.py        Version 0.3.6
+# xplnedsf.py        Version 0.3.7
 # ---------------------------------------------------------
 # Python module for reading and writing X_Plane DSF files.
 #
@@ -1024,7 +1024,7 @@ class XPLNEDSF:
             p.trias2cmds() #Update Commands accordingly
         return iPs
     
-    def cutPolyInMesh(self, poly, accuracy=10): ### NEW #### #updates dsf mesh to contain the polygon shape as edges (if existing vertices, edges are closer than accourcy in m they will be used), elevation will be given by mesh  ######## NEW #####
+    def cutPolyInMesh(self, poly, accuracy=5): ### NEW #### #updates dsf mesh to contain the polygon shape as edges (if existing vertices, edges are closer than accourcy in m they will be used), elevation will be given by mesh  ######## NEW #####
         self._log_.info("Cutting Polygon with {} vertices into the mesh.".format(len(poly) - 1))
         border_vertices = set() #will inclued all vertices of new and existing vertices defining the border of the poly within the mesh
         for i in range(len(poly) - 1):   # assumes that last vertex in poly is same as first, to have a closed polygon   #### NEW 4 insert verices first ####
@@ -1045,6 +1045,68 @@ class XPLNEDSF:
         return border_vertices.union(inner_vertices)
         # retruned vertices have to be set to required elevation
         ## TBD normal vectors of these vertices need to be updated if no raster is existent / used
+        
+    def cutTerrainInMesh(self, poly, terrain, accuracy=5):  #cuts Poly but only keeps physical trias with new terrain replaced, puts trias in submeter pools    ##### NEW 8 #####
+        self._log_.info("Cutting Polygon with {} vertices into the mesh and only keep physical trias with terrain: {}.".format(len(poly) - 1, terrain))
+        V = self.cutPolyInMesh(poly, accuracy) #cuts poly and returns in V all vertices at border and inside poly
+        self._log_.info("From pure cutting {} vertices have been returend inside and at border of poly.".format(len(V)))
+        #Now identifiy or create terrain id for trias  + create according patch for those trias   #### TBD: Write as funciton to be used alsof from cutRwyProfileInMesh() ####
+        terrain_id = 0 #find terrain id for new patch that includes trias for runway
+        while terrain_id < len(self.DefTerrains) and self.DefTerrains[terrain_id] != terrain:
+            self._log_.info("      Terrain id: {} named:{}.".format(terrain_id, self.DefTerrains[terrain_id]))  ### TESTING #####
+            terrain_id += 1
+        if terrain_id == len(self.DefTerrains):
+            self._log_.info("Terrain {} for runway profile not in current list. Will be added with id {}!".format(terrain, terrain_id))
+            self.DefTerrains[terrain_id] = terrain
+        else:
+            self._log_.info("Terrain {} for runway profile found in current list with id: {}.".format(self.DefTerrains[terrain_id], terrain_id))
+        newTerrainPatch = None #will be defined below based on pool of first vertex inserted
+        #Now remove trias from poly and insert physical ones in new patch
+        Vcoords = [] #get all coordinates of vertices in cutted poly
+        for v in V:
+            Vcoords.append((self.V[v[0]][v[1]][0], self.V[v[0]][v[1]][1]))
+        l = self.PatchesInArea(*self.BoundingRectangle(Vcoords)) 
+        keptV = set() #set with all vertices which will remain
+        for p in l:
+            self._log_.info("Checking patch {} for terrain replacement with flag {}.".format(self.Patches.index(p), p.flag))
+            toberemoved = []
+            for t in p.trias:
+                if (t[0][0], t[0][1]) in V and (t[1][0], t[1][1]) in V and (t[2][0], t[2][1]) in V:
+                    toberemoved.append(t)
+                    if p.flag == 1: #patch is made from physical trias
+                        if newTerrainPatch == None: #Now patch needs to be defined
+                            newTerrainPatch = XPLNEpatch(1, 0.0, -1.0, t[0][0], terrain_id) ##use pool index of first vertex as pool defintion
+                            newTerrainPatch.cmds.append( [1, t[0][0] ] ) #selection of poolIndex has to be set always as first command ### TBD: to be optimized that not twice set when created and again in cmds
+                        
+                        newTria = [] #vertices for new tria    
+                        for v in [ (t[0][0], t[0][1]), (t[1][0], t[1][1]), (t[2][0], t[2][1]) ]: #go through all vertices in tria   #### avoid deepcopy by excplicit value listing, neccessary ???? ###
+                            #just use first five values of vertex and scaling and create a new submeter vertex in dsf   ##### NEW 9 #####
+                            newSubmV = []
+                            RangeForNewSubmV = []
+                            for i in range(5): #This is doing deepcopy for vertex list and scaling list    
+                                newSubmV.append(self.V[v[0]][v[1]][i])
+                                RangeForNewSubmV.append([self.Scalings[v[0]][i][0], self.Scalings[v[0]][i][1]])
+                            pid, n = self._addSubmVertex_(newSubmV, RangeForNewSubmV)
+                            keptV.add((pid, n)) #new Vertex with submPool and only 5 cooordinates will be kept
+                            newTria.append((pid, n))
+                            self._log_.info("New submeter vertex created out of first 5 values from {} and scaling {} for RWY profile.".format(self.V[v[0]][v[1]], self.Scalings[v[0]])) ####### JUST FOR CHECK ### TO BE REMOVED !! ###
+                        newTerrainPatch.trias.append(newTria)
+                        self._log_.info("    New triangle {} for new terrain.".format(newTria))
+                            
+                        #newTria = [ (t[0][0],t[0][1]), (t[1][0],t[1][1]), (t[2][0],t[2][1]) ]  #avoid deepcopy  #### neccessary?? ###    if NEW 9 above does not work replace it with this code
+                        #newTerrainPatch.trias.append(newTria)
+                        #self._log_.info("    New triangle {} for new terrain.".format(newTria))
+                        #keptV.add((t[0][0], t[0][1]))
+                        #keptV.add((t[1][0], t[1][1]))
+                        #keptV.add((t[2][0], t[2][1]))
+            for t in toberemoved:
+                p.trias.remove(t) ### Remove all triangles in poly
+                self._log_.info("    Removed triangle {} for new terrain.".format(t))
+            p.trias2cmds() #Update Commands accordingly
+        newTerrainPatch.trias2cmds() #Update Commands for new terrain
+        self._setPatchBoundary_(newTerrainPatch)
+        self.Patches.append(newTerrainPatch)
+        return keptV
         
     def cutRwyProfileInMesh(self, rwy, terrain, interval=20, accuracy=1): ###NEW######  ### NEW 5 with Terrain ###   ### TBD: Have interval and accuracy flexible!!! ###
         #cuts runway in mesh with intersections of runway every interval meter; allows to set granular elevation
