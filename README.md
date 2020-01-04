@@ -1,6 +1,6 @@
 # ATTENTION: IN DEVELOPMENT
 
-## Requires Python 3.7 (currently issue with Python 3.8)
+## Requires 64 bit Python 3.7 (currently issue with Python 3.8)
 ## Branch to allow sloped runways
 
 # Better Flattening for X-Plane Airports
