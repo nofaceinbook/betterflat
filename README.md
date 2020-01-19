@@ -38,6 +38,7 @@ In the main window you can click on "Config" to enter the configuration menu giv
 * Replace terrain: If this option is used the exisiting terrain will be replaced inside cutted area.
 * Cut Runway Profile: Generates a profile for the runway. If now defintion is given below the profile is based on the raster inside the dsf file. 
 * Profile Definition: Here you can define your own profile for the runway like -100@97 0@97 100@97 600@101 800@99 where the number before @ is the distance from runway start and the number after the height (both in meter). Values between are interpolated based on these numbers. If you define a profile, you need to give definition for every runway of the airport seperated with ";".
+Don't forget to press the "Update Configuration" button after you applied changes.
 
 ## Issues
 Check out the FAQs included.
