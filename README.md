@@ -19,8 +19,8 @@ In case SCIPY packe is installed blfat can also generate a runway profile. Refer
 * Supports export of airport mesh area to kml-file. So you can check which mesh triangles will be flattened e.g. with Google Earth.
 
 ## Installation
-For Windows you can just download and run the bflat.exe that includes all you need. This version will also read 7zipped dsf-fils directly. 
-For other systems you need Python 64bit version installed (tested with version 3.6./3.7) and download all the Pyhton 3 scripts: bfalt.py, xlpnedsf.py, bflatKMLexport.py. 
+For Windows you can just download and run the bflat.exe that includes all you need. This version will also read 7zipped dsf-fils directly. However, this version does not support profile generation as according libraries make the file to large.
+For other systems or if you want to gernerate runway profiles you need Python 64bit version installed (tested with version 3.6./3.7) and download all the Pyhton 3 scripts: bfalt.py, xlpnedsf.py, bflatKMLexport.py. 
 The scripts all run with standard libraries. Optional you can install pylzma (https://github.com/fancycode/pylzma)  
 library in python. This allows you to directly read zipped dsf-files.  As this requires some more IT knowledge 
 you can skip this and just manually unzip the 7zipped dsf files you want to adapt e.g. by using https://www.7-zip.org/
