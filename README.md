@@ -6,7 +6,7 @@ Only the triangles of the mesh that intersect with the airport boundary or that 
 are flattened to a height you can define. You also have the option to just flatten the mesh triangles under the runways.
 This version also offers cutting of triangles. When this option "cut" is ticked, then triangles are cut at runway or airport boundary. 
 In the CONFIGURATION menu you can define the terrain that replaces the terrain within the boundary. Thus you can define airports how they will look like at the time LR has adapted the mesh for the airport based on your boundary for a later version of X-Plane.
-In case SCIPY packe is installed blfat can also generate a runway profile. Refer to details below.
+In addition it is also possible to generate runway profiles. Refer to details below.
 
 ## Advantages of bflat
 * User friendly GUI
@@ -24,7 +24,7 @@ For other systems or if you want to gernerate runway profiles you need Python 64
 The scripts all run with standard libraries. Optional you can install pylzma (https://github.com/fancycode/pylzma)  
 library in python. This allows you to directly read zipped dsf-files.  As this requires some more IT knowledge 
 you can skip this and just manually unzip the 7zipped dsf files you want to adapt e.g. by using https://www.7-zip.org/
-If you want to generate runway profiles you need the "interpolate" function from SCIPY (www.SciPy.org). 
+
 
 ## Running the tool
 Start the exe-file or run the bflat.py pyhton script. The GUI will open and steps should be self-explainable. 
@@ -42,6 +42,6 @@ Don't forget to press the "Update Configuration" button after you applied change
 
 ## Issues
 Check out the FAQs included.
-Cutting runway profile is not working very stable, especially if you have a HD mesh with many triangles. OFten it helps to modify parameters like higher accuracy or move boundaries/runay.
+Cutting runway profile is not working very stable, especially if you have a HD mesh with many triangles. Often it helps to modify parameters like higher accuracy or move boundaries/runay. Also make sure not to create a profile or cut where already one exists, so make sure not change areas in the dsf-file your already have changed.
 The tools creates a log file bflat.log. Open the file with a text editor. You might find additional information there about your problem.
 Please report errors or give comments.
