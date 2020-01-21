@@ -3,7 +3,7 @@
 #
 # bflat.py
 #        
-bflat_VERSION = "0.4.0 exp"
+bflat_VERSION = "0.4.1 exp"
 # ---------------------------------------------------------
 # Python GUI module for flattening a X-Plane mesh at a given airport.
 #
@@ -31,16 +31,6 @@ from shutil import copy2
 from tkinter import *
 from tkinter.filedialog import askopenfilename
 from math import cos, sqrt, radians #for getRunwayBounds calculations
-
-# For creating runway profiles the interpolation function from scipy is required
-# if not installed the cut runway profile option will not be available
-try:
-    from scipy import interpolate
-except ImportError:
-    SCIPYINSTALLED = False
-else:
-    SCIPYINSTALLED = True
-
 
 def displayHelp(win):
     newwin = Toplevel(win)
@@ -104,9 +94,6 @@ def ConfigMenu(win, config):
     profileType.set(config.isprofile)
     profileCB = Checkbutton(configwin, text="Cut Runway Profile (always uses terrain above)", variable=profileType)
     profileCB.grid(row=4, column=0, sticky=E, pady=4)
-    if not SCIPYINSTALLED:
-        profileCB.config(state = DISABLED)
-        log.warning("SCIPY library is NOT installed in Python, so it is not possible to cut runway profile!")
     text_label = Label(configwin, anchor=W, justify=LEFT, text="Profile Definition (if empty raster or tria elevation of dsf is used):").grid(row=5, column=0, columnspan=2, pady=4, padx=10)
     text_entry = Text(configwin, height=2, width=60)
     text_entry.grid(row=6, column=0, columnspan=2, padx=10, pady=4)
@@ -244,7 +231,111 @@ def getRunwayBounds (p1, p2, w):
         l.append([round(p2[1] + dx, 8), round(p2[0] + dy, 8)])
     l.append(l[0]) #add first corner to form closed loop
     return l
- 
+
+def gauss_jordan(m, eps = 1.0/(10**10)):
+    """Puts given matrix (2D array) into the Reduced Row Echelon Form.
+       Returns True if successful, False if 'm' is singular.
+       NOTE: make sure all the matrix items support fractions! Int matrix will NOT work!
+       Written by Jarno Elonen in April 2005, released into Public Domain"""
+    (h, w) = (len(m), len(m[0]))
+    for y in range(0,h):
+      maxrow = y
+      for y2 in range(y+1, h):    # Find max pivot
+        if abs(m[y2][y]) > abs(m[maxrow][y]):
+          maxrow = y2
+      (m[y], m[maxrow]) = (m[maxrow], m[y])
+      if abs(m[y][y]) <= eps:     # Singular?
+        return False
+      for y2 in range(y+1, h):    # Eliminate column y
+        c = m[y2][y] / m[y][y]
+        for x in range(y, w):
+          m[y2][x] -= m[y][x] * c
+    for y in range(h-1, 0-1, -1): # Backsubstitute
+      c  = m[y][y]
+      for y2 in range(0,y):
+        for x in range(w-1, y-1, -1):
+          m[y2][x] -=  m[y][x] * m[y2][y] / c
+      m[y][y] /= c
+      for x in range(h, w):       # Normalize row y
+        m[y][x] /= c
+    return True
+
+def lin_equation_solve(M, b):
+    """
+    solves M*x = b
+    return vector x so that M*x = b
+    :param M: a matrix in the form of a list of list
+    :param b: a vector in the form of a simple list of scalars
+    """
+    m2 = [row[:]+[right] for row,right in zip(M,b) ]
+    result = gauss_jordan(m2)
+    return [row[-1] for row in m2] if result else None
+
+def getspline(xp, yp):
+    """
+    for x values xp with according y values yp a natural cubic spline is defined
+    note: x values should be sorted from lowest to highest value!
+    note: generates only float values to be compatible with gaus_jordan function used
+    returns list with deepcopy list of x-values and list of cubic spline paramters (one sgement after the other)
+    """
+    points = len(xp)
+    segments = points - 1
+    if (points != len(yp)) or (points < 3):
+        return None
+    A = []
+    b = []
+    xp_returned = [] #deepcopy of returned x-values
+    for i in range(points):
+        xp_returned.append(float(xp[i]))
+    for i in range(4 * segments):
+        A.append([])
+        b.append(0.0)
+        for j in range(4 * segments):
+            A[i].append(0.0)
+    for i in range(segments):
+        #condition for left end of segment
+        A[i][4*i+0] = float(xp[i]**3)
+        A[i][4*i+1] = float(xp[i]**2)
+        A[i][4*i+2] = float(xp[i])
+        A[i][4*i+3] = 1.0
+        b[i] = float(yp[i])
+        #condition for right end of segment
+        A[segments+i][4*i+0] = float(xp[i+1]**3)
+        A[segments+i][4*i+1] = float(xp[i+1]**2)
+        A[segments+i][4*i+2] = float(xp[i+1])
+        A[segments+i][4*i+3] = 1.0        
+        b[segments+i] = float(yp[i+1])
+        if i == 0:
+            continue #do outer points later, so one row missing now therefore -1 below
+        #condition for first derivation of inner points, setting b value to 0 omitted
+        A[2*segments+i-1][4*(i-1)+0] = float(3*xp[i]**2)
+        A[2*segments+i-1][4*(i-1)+1] = float(2*xp[i])
+        A[2*segments+i-1][4*(i-1)+2] = 1.0
+        A[2*segments+i-1][4*(i-1)+4] = float(-3*xp[i]**2)
+        A[2*segments+i-1][4*(i-1)+5] = float(-2*xp[i])
+        A[2*segments+i-1][4*(i-1)+6] = -1.0
+        #condition for second derivation of inner points, setting b value to 0 omitted
+        A[3*segments+i-1][4*(i-1)+0] = float(6*xp[i])
+        A[3*segments+i-1][4*(i-1)+1] = 2.0
+        A[3*segments+i-1][4*(i-1)+4] = float(-6*xp[i])
+        A[3*segments+i-1][4*(i-1)+5] = -2.0
+    # Now consider derivation for endpoints, here for NATURAL SPLINE so second derivation 0 at ends, setting b to 0 omitted
+    A[3*segments-1][0] = float(6*xp[0])
+    A[3*segments-1][1] = 2.0
+    A[4*segments-1][4*(segments-1)] = float(6*xp[segments])
+    A[4*segments-1][4*(segments-1)+1] = 2.0
+    #Now solve according linear equations
+    x = lin_equation_solve(A, b)
+    return [xp_returned, x]
+
+def evalspline(x, spline): #evaluates spline at position x
+    #assumes spline in format with two lists, first x-values giving intervals/segments, second all paramters for cubic spline one after the other
+    #important: it is assumed that x-values for intervals/segments are ordered from low to high
+    for i in range(len(spline[0]) - 1):#splines are one less then x-points
+        if x <= spline[0][i+1]: #for all points before second point use first spline segment, for all after the last-1 use last spline segment
+            break
+    return spline[1][4*i+0] * x**3 + spline[1][4*i+1] * x**2 + spline[1][4*i+2] * x + spline[1][4*i+3] 
+         
 def interpolateRWYprofile(rwys, dsf, rwyNum, defintion=""): #calculates the interpolated rwy profiles for runwy number rwyNum       
     #definition could include profile defined in "0@98.2 180@97.4 ...." where value before @ is distance and after elevation, use ";" to seperate multiple rwy 
     log.info("Interpolating runway profile for runway number {}".format(rwyNum))
@@ -274,7 +365,8 @@ def interpolateRWYprofile(rwys, dsf, rwyNum, defintion=""): #calculates the inte
             vx, vy = v.split("@")
             x_points.append(float(vx))
             y_points.append(float(vy))
-    rwySpline = interpolate.splrep(x_points, y_points, s=12) ######### TBD: smooth factor just fixed test value, has to be variable !!!! ###########
+    #rwySpline = interpolate.splrep(x_points, y_points, s=12) ######### TBD: smooth factor just fixed test value, has to be variable !!!! ###########
+    rwySpline = getspline(x_points, y_points)
     log.info(logprofile)
     return rwySpline
 
@@ -288,8 +380,10 @@ def interpolatedRWYelevation(rwy, p, rwySpline): #based on runway it's spline pr
     orthoEndD = (p[0] + inclination_of_ortho[0], p[1] + inclination_of_ortho[1]) # End of orthogonal line of RWY through point p with length double of RWY (to guarentee intersection on center line)
     p_centered = intersection(startD, endD, orthoStartD, orthoEndD) #location of p on center line
     d = distance(start, p_centered)
-    elev = interpolate.splev(d, rwySpline) 
-    return elev.item()        
+    #elev = interpolate.splev(d, rwySpline)
+    elev = evalspline(d, rwySpline)
+    return elev
+    #return elev.item()        
 
 
 def moveSubmPools(dsf, V):
