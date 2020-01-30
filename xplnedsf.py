@@ -1,6 +1,6 @@
 #******************************************************************************
 #
-# xplnedsf.py        Version 0.4.0
+# xplnedsf.py        Version 0.4.2
 # ---------------------------------------------------------
 # Python module for reading and writing X_Plane DSF files.
 #
@@ -24,6 +24,7 @@
 #
 #******************************************************************************
 
+# NEW Version 0.4.2 Function PointLocationInTria returns also tuple if denom is zero
 
 from os import path, stat #required to retrieve length of dsf-file
 from struct import pack, unpack #required for binary pack and unpack
@@ -55,7 +56,7 @@ def distance(p1, p2): #calculates distance between p1 and p2 in meteres where p 
 def PointLocationInTria(p, t): #delivers location of point p in Tria t by vectors spanned by t from last vertex in tria
     denom = ((t[1][1] - t[2][1])*(t[0][0] - t[2][0]) + (t[2][0] - t[1][0])*(t[0][1] - t[2][1]))
     if denom == 0: ### to be checked when this is the case!!!!
-        return 0
+        return -0.01, -0.01 ###NEW NEW NEW, should actually never be the case, but for isPointInTria it delviers NO!
     nom_a = ((t[1][1] - t[2][1])*(p[0] - t[2][0]) + (t[2][0] - t[1][0])*(p[1] - t[2][1]))
     nom_b = ((t[2][1] - t[0][1])*(p[0] - t[2][0]) + (t[0][0] - t[2][0])*(p[1] - t[2][1]))
     a = nom_a / denom
