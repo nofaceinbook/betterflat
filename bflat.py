@@ -3,7 +3,7 @@
 #
 # bflat.py
 #        
-bflat_VERSION = "0.4.2 exp"
+bflat_VERSION = "0.4.3 exp"
 # ---------------------------------------------------------
 # Python GUI module for flattening a X-Plane mesh at a given airport.
 #
@@ -22,6 +22,7 @@ bflat_VERSION = "0.4.2 exp"
 #
 #******************************************************************************
 
+# New version 0.4.3: Error corrections in xplnedsf.py (refer this file for details)
 
 from logging import StreamHandler, FileHandler, getLogger, Formatter
 from xplnedsf import *
