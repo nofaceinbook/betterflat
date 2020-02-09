@@ -1,6 +1,6 @@
 #******************************************************************************
 #
-# xplnedsf.py        Version 0.4.2
+# xplnedsf.py        Version 0.4.3
 # ---------------------------------------------------------
 # Python module for reading and writing X_Plane DSF files.
 #
@@ -25,6 +25,8 @@
 #******************************************************************************
 
 # NEW Version 0.4.2 Function PointLocationInTria returns also tuple if denom is zero
+# NEW Version 0.4.3 Avoid errors when encoding pools with negative value or above 65535; values with -1 and 65536 come probably from rounding
+# NEW Version 0.4.3 Avoid error when top triangle of runway does not exist, due to existing verctices in mesh not adding enough vertices on runway side A
 
 from os import path, stat #required to retrieve length of dsf-file
 from struct import pack, unpack #required for binary pack and unpack
@@ -407,11 +409,23 @@ class XPLNEDSF:
                 for i in range(1, len(p)): #go through all values of a plane for differntiation and append to current plane
                     plane.append((p[i][n] - p[i-1][n]) % 65536)  #Calculate difference to previous value AND take care of wrapping for two byte unsigned integer
                 encpool += pack('<B',3) #plane will be encoded differntiated + runlength
+                if p[0][n] < 0:  #### NEW 4.3 #####
+                    self._log_.warning("In pool {} negative value {} to be encoded. Set to 0.".format(self.V.index(p), p[0][n]))   
+                    p[0][n] = 0
+                if p[0][n] > 65535: #### NEW 4.3 #####
+                    self._log_.warning("In pool {} exceeding value {}  to be encoded. Set to 65535.".format(self.V.index(p), p[0][n]))
+                    p[0][n] = 65535      
                 pack('<H',p[0][n])
                 ## Now perform run-length encoding ##
                 for rlpair in self._encodeRunLength_(plane):
                     encpool += pack('<B', rlpair[0]) #encode runlength value
                     for v in rlpair[1]:
+                        if v < 0:   #### NEW 4.3 #####
+                            self._log_.warning("In pool {} negative value {} to be encoded. Set to 0.".format(self.V.index(p), v))  
+                            v = 0
+                        if v > 65535: #### NEW 4.3 #####
+                            self._log_.warning("In pool {} exceeding value {}  to be encoded. Set to 65535.".format(self.V.index(p), v))
+                            v = 65535                            
                         encpool += pack('<H', v)
             self._updateProgress_(len(encpool)) 
             self._Atoms_['LOOP'].append(encpool)
@@ -1206,7 +1220,7 @@ class XPLNEDSF:
         self._log_.info("CREATED RUNWAY PROFILE:")
         for i in range(len(rwyAcoords)):
             self._log_.info("Interval at {}m {} coords:{}    opposite {}m {} coords:{} ".format(round(distance(rwyAcoords[0], rwyAcoords[i]), 3), rwyApv[i], rwyAcoords[i], round(distance(rwyBcoords[0], rwyBcoords[i]), 3), rwyBpv[i], rwyBcoords[i]))
-            
+        
         #Sixth: Identify all vertices inside of runway and add to border verticse to be all removed below for new profile
         inner_vertices = set() # Find vertices inside rwy boundary
         l = self.PatchesInArea(*self.BoundingRectangle(rwy))
@@ -1251,7 +1265,12 @@ class XPLNEDSF:
             #IMPORTANT: insert vertices of trias in clockwise order --> was checked when creating box for runway
             rwyPatch.trias.append([ rwyApv[i-1], rwyApv[i], rwyBpv[i-1] ])
             rwyPatch.trias.append([ rwyBpv[i-1], rwyApv[i], rwyBpv[i] ])
-        #Now insert vertices on buttom in first tria of runway ### NEW 4 ###
+
+        for i in range(len(rwyApv), len(rwyBpv)):#add trias in case on side B are still more vertices than on side A ######### NEW 0.4.3 ##########
+            self._log_.info("RWY PROFILE ON SIDE B HAS ADDITIONAL VERTEX: at {}m {} coords: {}. Additional tria for that vertex added.".format(round(distance(rwyBcoords[0], rwyBcoords[i]), 3), rwyBpv[i], rwyBcoords[i]))
+            rwyPatch.trias.append([ rwyBpv[i-1], rwyApv[-1], rwyBpv[i] ])
+
+        #Now insert vertices on buttom in first tria of runway 
         self._log_.info("INSERT VERTICES ON BUTTOM OF RUNWAY:")
         rwyPatch.trias.remove([rwyApv[0], rwyApv[1], rwyBpv[0]]) #remove first tria which is replaced below by new inserted trias for button vertices
         previousVonShoulder = rwyBpv[0]
@@ -1260,9 +1279,12 @@ class XPLNEDSF:
                 rwyPatch.trias.append([ previousVonShoulder, dictShoulder[0][k], rwyApv[1] ])
                 previousVonShoulder = dictShoulder[0][k]
                 #assumes that last k is key to second corner of runway button
-        #Now insert vertices on top in last tria of runway ### NEW 4 ###
+        #Now insert vertices on top in last tria of runway 
         self._log_.info("INSERT VERTICES ON TOP OF RUNWAY:")
-        rwyPatch.trias.remove([rwyBpv[-2], rwyApv[-1], rwyBpv[-1]]) #remove last tria which is replaced below by new inserted trias for button vertices
+        if [rwyBpv[-2], rwyApv[-1], rwyBpv[-1]] in rwyPatch.trias: #check that top tria really exists an give error if not ## NEW 4.3 
+            rwyPatch.trias.remove([rwyBpv[-2], rwyApv[-1], rwyBpv[-1]]) #remove last tria which is replaced below by new inserted trias for top vertices
+        else:
+            self._log_.error("Top triangle of RUNWAY not existing! Might result in erroroes mesh!")
         previousVonShoulder = rwyApv[-1]
         for k in sorted(dictShoulder[2].keys()):
             if k >= 0.01: #overjumps first corner of rwy on buttom, this is already in previousVonShoulder
