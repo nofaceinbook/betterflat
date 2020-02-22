@@ -1,6 +1,6 @@
 #******************************************************************************
 #
-# xplnedsf.py        Version 0.5.0  for mexp
+# xplnedsf2.py        Version 0.5.1  for muxp
 # ---------------------------------------------------------
 # Python module for reading and writing X_Plane DSF files.
 #
@@ -48,11 +48,6 @@ class XPLNEpatch:
         self.far = far
         self.defIndex = defIndex
         self.cmds = []
-        self.trias = []  ###### NEW: store triangles calculated with triangles()  ###### TBD: really needed or use always functions triangles() and directly trias2cmds() to store changes?? ### NEW ## TBD ###
-        self.minx = 181  #set out of bound values first  
-        self.maxx = -181 #will be set to bounding rectangle values for patch
-        self.miny = 91   #to quickly see if the patch applies for a certain ares
-        self.maxy = -91  #values set correctly with function _setPatchBoundary()_ after being read  
     def triangles(self): #returns triangles as a list l of [3 x vertexes] that are defined by commands c of thte patch where each vertex of triangle is a pair of index to pool p and vertex        
         l = []
         p = None #current pool needs to be defined with first command
@@ -97,7 +92,7 @@ class XPLNEpatch:
                     l.append( [ [p, c[1]], [p, v + 1], [p, v + 2] ] )                    
         return l
               
-    def trias2cmds(self, trias): ############## UPDATE FOR MEXP to allow definition of own trias ### before function used self.trias below in for t loop ########
+    def trias2cmds(self, trias): ############## UPDATE FOR MEXP to allow definition of own trias 
         ### For the moment only uses single tirangle CMDS for different pools ## To be updeated 
         self.cmds = [self.cmds[0]]
         i = 0 #counts number of trias
@@ -156,7 +151,6 @@ class XPLNEDSF:
         self.DefPolygons = {}  #dictionary containing for each index number (0 to n-1) the name of Polygon definition file
         self.DefNetworks = {}  #dictionary containing for each index number (0 to n-1) the name of Network definition file; actually just one file per dsf-file
         self.DefRasters = {}   #dictionary containing for each index number (0 to n-1) the name of Raster definition (for the moment assuing "elevaiton" is first with index 0)
-        self.submP = set() #set with indices of vertex pools that allow submeter elevation; not given by dsf file but checked when submeter vertices should be added   ##### NEW ######
         self._log_.info("Class XPLNEDSF initialized.")
 
     def _setLogger_(self, logname):
@@ -578,9 +572,6 @@ class XPLNEDSF:
             counter += 1
             if not counter % amount_of_two_percent_CMDS: #after every 2% processed of commands update progress  --> RAISES ERROR when less than 50 CMDS
                 self._updateProgress_(round(len(self._Atoms_['SDMC']) / 100)) #count only half of the length, other half by unpackCMDS
-        for p in self.Patches: #add to each patch its trias as list and the rectangle boundary coordinates of patch   
-            p.trias = p.triangles()   ##NEW##
-            self._setPatchBoundary_(p) ##NEW##
         self._log_.info("{} patches extracted from commands.".format(len(self.Patches)))
         self._log_.info("{} different Polygon types including there definitions extracted from commands.".format(len(self.Polygons)))
         self._log_.info("{} different Objects with placements coordinates extracted from commands.".format(len(self.Objects)))
@@ -731,29 +722,9 @@ class XPLNEDSF:
         self._packAllScalings_()
         self._packCMDS_()
         return 0
-    
-    def _setPatchBoundary_(self, p): #sets min/max values of patch p          
-        for t in p.trias:
-            for v in t: #all vertexes of each triangle in patch
-                if v[1] < 0: ############## NEW 3: ERROR CHECK - TO BE REMOVED LATER ##############
-                    self._log_.warning("Index to Pool {} is negative: {}".format(v[0], v[1]))
-                    return 1
-                if v[1] >= len(self.V[v[0]]):  ############## NEW 3: ERROR CHECK - TO BE REMOVED LATER ##############
-                    self._log_.warning("Index to Pool {} is higher {} than number of elements {}.".format(v[0], v[1], len(self.V[v[0]])))
-                    return 1
-                if self.V[v[0]][v[1]][0] < p.minx:
-                    p.minx = self.V[v[0]][v[1]][0]
-                if self.V[v[0]][v[1]][0] > p.maxx:
-                    p.maxx = self.V[v[0]][v[1]][0]
-                if self.V[v[0]][v[1]][1] < p.miny:
-                    p.miny = self.V[v[0]][v[1]][1]
-                if self.V[v[0]][v[1]][1] > p.maxy:
-                    p.maxy = self.V[v[0]][v[1]][1]
-        #####################self._log_.info("Patch Boundary x between {} - {} and y between {} - {}.".format(p.minx, p.maxx, p.miny, p.maxy))
-        return 0
-                                          
+                                              
   
-    def getElevation(self, x, y, z = -32768): #gets Elevation at point (x,y) from raster grid Elevation
+    def getVertexElevation(self, x, y, z = -32768): #gets Elevation at point (x,y) from raster grid Elevation or from Vertex itself if assigned to vertex
         if int(z) != -32768: #in case z vertex is different from -32768 than this is the right height and not taken from raster
             return z
         if "sim/west" not in self.Properties:
@@ -766,17 +737,8 @@ class XPLNEDSF:
             self._log_.error("Cannot get elevation as y coordinate is not within boundaries!!!")
             return None
         if len(self.DefRasters) == 0: #No raster defined, use elevation from trias  #### NEW 7 ####
-            self._log_.info("dsf includes no raster, elevation taken from trias!")  #### ERROR CHECKING - TO BE REMOVED ###
-            l = self.PatchesInArea(y, y, x, x)  #find all patches relevant for point (x, y)
-            for p in l:
-                for t in p.trias:
-                    tv = self.TriaVertices(t)
-                    if isPointInTria([x, y], tv):
-                        l0, l1 = PointLocationInTria([x, y], tv)
-                        elev = self.V[t[2][0]][t[2][1]][2] + l0 * (self.V[t[0][0]][t[0][1]][2] - self.V[t[2][0]][t[2][1]][2])  + l1 * (self.V[t[1][0]][t[1][1]][2] - self.V[t[2][0]][t[2][1]][2]) #elvation is plane 2
-                        self._log_.info("Elevation at x: {}  y: {}  is  {}m.".format(x, y, elev))  #### ERROR CHECKING - TO BE REMOVED ###
-                        return elev
-            self._log_.error("No triangle in mesh for position x: {}  y: {}  found in order to retrieve elevation!".format(x, y))  
+            self._log_.error("getRasterElevation: dsf includes no raster, elevation returned is None")
+            return None
         else: # use raster to get elevation; THIS VERSION IS ASSUMING THAT ELEVATION RASTER IS THE FIRST RASTER-LAYER (index 0), if it is not called "elevation" a warning is raised ###
             if self.DefRasters[0] != "elevation":
                 self._log_.warning("Warning: The first raster layer is not called elevation, but used to determine elevation!")
@@ -787,7 +749,7 @@ class XPLNEDSF:
                 y = round(y, 0)
             x = int(x) #for point-centric, the outer edges of the pixels lie on the boundary of dsf, and just cutting to int should be right
             y = int(y)
-            return self.Raster[0].data[x][y]   ############## REMOVED () around returned value here !!!!!! ######################
+            return self.Raster[0].data[x][y]   
 
 
     def getPolys(self, type): #returns all polygons of one type (numbered as in DefPolys) in a list and for each poly parameter following all vertices as reference [poolId, index]
@@ -820,33 +782,7 @@ class XPLNEDSF:
     def TriaVertices(self, t): #returns 3 vertices of triangle as list of [lon, lat] pairs  ############# TBD: CHECK WHERE NEEDED !!! ################
         return [  [self.V[t[0][0]][t[0][1]][0], self.V[t[0][0]][t[0][1]][1]], [self.V [t[1][0]] [t[1][1]][0], self.V[t[1][0]][t[1][1]][1]],  [self.V[t[2][0]][t[2][1]][0], self.V[t[2][0]][t[2][1]][1]] ]
 
-    
-    def PatchesInArea (self, latS, latN, lonW, lonE):  #################### NEW UPDATE: Function uses now trias list of trias instead trias() build funciton  ### NEW #######################
-    #
-    # returns a list of all patches in dsf, where the rectangle bounding of the patch intersects
-    # the rectangle area defined by coordinates
-    # Note: it could be the case that there is not part of the patch really intersecting the area but this
-    #       functions reduces the amount of patches that have then carefully to be inspected e.g. for real intersections
-    #
-        self._log_.info("Start to find patches intersecting area SW ({}, {}) and NE ({}, {}).".format(latS, lonW, latN, lonE))
-        l = [] # list of patch-ids intersecting area
-        count = 0
-        for p in self.Patches:
-            ## v = []    #### NEW: Not needed any more ###### NEW ###
-            ## for t in p.triangles(): #all triangles in each patch
-            ##    v.extend(self.TriaVertices(t)) #so all vertices of the patch
-            ## miny, maxy, minx, maxx = self.BoundingRectangle(v)
-            if self._DEBUG_: self._log_.debug("Checking patch {} of {} which lies in SW ({}, {}) and NE ({}, {}).".format(count, len(self.Patches), miny, minx, maxy, maxx))
-            if not (p.minx < lonW and p.maxx < lonW): #x-range of box is not completeley West of area      #### NEW ### use p.minx instead of minx - also below ##### NEW ###
-                if not (p.minx > lonE and p.maxx > lonE): #x-range of box is not completele East of area
-                    if not (p.miny < latS and p.maxy < latS): #y-range is not completele South of area
-                        if not (p.miny > latN and p.maxy > latN): #y-range is not conmpletele North of ares
-                            l.append(p)  #so we have an intersection of box with area and append the patch index
-                            if self._DEBUG_: self._log_.debug("Patch {} in SW ({}, {}) and NE ({}, {}) does intersect.".format(count, miny, minx, maxy, maxx))
-            count += 1
-        self._log_.info("{} intersecting patches of {} patches found.".format(len(l), len(self.Patches)))
-        return l
-           
+          
                     
     def read(self, file):  
         self.__init__("_keep_logger_","_keep_statusfunction_") #make sure all values are initialized again in case additional read
