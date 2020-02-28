@@ -1,6 +1,6 @@
 #******************************************************************************
 #
-# xplnedsf2.py        Version 0.5.1  for muxp
+# xplnedsf2.py        Version 0.5.3  for muxp
 # ---------------------------------------------------------
 # Python module for reading and writing X_Plane DSF files.
 #
@@ -338,6 +338,8 @@ class XPLNEDSF:
                 for i in range(1, len(p)): #go through all values of a plane for differntiation and append to current plane
                     plane.append((p[i][n] - p[i-1][n]) % 65536)  #Calculate difference to previous value AND take care of wrapping for two byte unsigned integer
                 encpool += pack('<B',3) #plane will be encoded differntiated + runlength
+                if p[0][n] < 0 or p[0][n] > 65535: ############################################### ONLY TESTING, BUT ERROR CHECK FOR ROUNDING REQURIED as in latest bflat.py ###################
+                    self._log_.error("Wrong encoding value: {} in Pool {} and Plane {}!!".format(p[0][n], self.V.index(p), n))
                 pack('<H',p[0][n])
                 ## Now perform run-length encoding ##
                 for rlpair in self._encodeRunLength_(plane):
@@ -421,7 +423,8 @@ class XPLNEDSF:
         for rn in range(len(self._Atoms_['IMED'])):
             R = XPLNEraster()
             R.ver, R.bpp, R.flags, R.width, R.height, R.scale, R.offset = unpack('<BBHLLff', self._Atoms_['IMED'][rn])
-            if self._DEBUG_: self._log_.debug("Info of new raster layer: {} {} {} {} {} {} {}".format(R.ver, R.bpp, R.flags, R.width, R.height, R.scale, R.offset))
+            #if self._DEBUG_: self._log_.debug("Info of new raster layer: {} {} {} {} {} {} {}".format(R.ver, R.bpp, R.flags, R.width, R.height, R.scale, R.offset))
+            self._log_.info("Info of new raster layer: {} {} {} {} {} {} {}".format(R.ver, R.bpp, R.flags, R.width, R.height, R.scale, R.offset))
             if R.flags & 1:  #signed integers to be read
                 if R.bpp == 1:
                     ctype = "<b"
@@ -459,6 +462,62 @@ class XPLNEDSF:
                 self._updateProgress_(R.bpp * R.width) #update progress with number of bytes per raster line
             self.Raster.append(R) #so raster list of list is returned to be indexed by [x][y]
         self._log_.info("Finished extracting Rasters.")
+   
+   
+    def _packRaster_(self):  #packs all rasters from lists into atoms
+        self._log_.info("Packing {} raster layers...".format(len(self.Raster)))
+        self._Atoms_['DMED'] = []
+        self._Atoms_['IMED'] = []
+        for rn in range(len(self.Raster)):
+            R = self.Raster[rn]
+            encrasterinfo  = pack('<BBHLLff', R.ver, R.bpp, R.flags, R.width, R.height, R.scale, R.offset)
+            self._Atoms_['IMED'].append(encrasterinfo)
+            #if self._DEBUG_: self._log_.debug("Info of packed raster layer: {} {} {} {} {} {} {}".format(R.ver, R.bpp, R.flags, R.width, R.height, R.scale, R.offset))
+            self._log_.info("Info of packed raster layer: {} {} {} {} {} {} {}".format(R.ver, R.bpp, R.flags, R.width, R.height, R.scale, R.offset))
+            if R.flags & 1:  #signed integers to be read
+                if R.bpp == 1:
+                    ctype = "<b"
+                elif R.bpp == 2:  ##### this is the only case tested so far !!!!!!!
+                    ctype = "<h"
+                elif R.bpp == 4:
+                    ctype = "<i"
+                else:
+                    self._log_.error("Not allowed bytes per pixel in Raster Definition!!!")
+                    return 2
+            elif R.flags & 2: #unsigned integers to be read
+                if R.bpp == 1:
+                    ctype = "<B"
+                elif R.bpp == 2:
+                    ctype = "<H"
+                elif R.bpp == 4:
+                    ctype = "<I"
+                else:
+                    self._log_.error("Not allowed bytes per pixel in Raster Definition!!!")
+                    return 3
+            elif not (R.flags & 1) and not (R.flags & 2): #neither first nor second bit set means that 4 byte float has to be read
+                if R.bpp == 4:
+                    ctype ="<f"
+                else:
+                    self._log_.error("Not allowed bytes per pixel in Raster Definition!!!")
+                    return 4
+                
+            encdata = bytearray()
+
+            for y in range(R.height): #going x-wise from east to west just the bytes per pixes ################# YYYYYYY
+                line = b'' #current encoded bytes just for one line; this is quick enough wiht +=, then extend lines to encdata
+                for x in range(R.width): #going y-wise from south to north, always jumping over the width of each x-line ################## XXXXXX
+                    v = R.data[x][y] / R.scale - R.offset # APPLYING SCALE + OFFSET to raster elevation at position x, y
+                    if R.flags & 1 or R.flags & 2: #integers to be read
+                        v = int(v)
+                    ##### TBD: check if v is not negative for signed integer and if size for packing is according....
+                    line += pack(ctype, v) #pack bytes for position x, y of raster
+                encdata.extend(line)
+                self._updateProgress_(R.bpp * R.width) #update progress with number of bytes per raster line
+                #self._log_.info("Raster line {} encoded".format(x))
+            #self._log_.info("Last Raster line encoded: {}".format(line))
+            self._Atoms_['DMED'].append(encdata) #raster data for raster number rn added to atom
+        self._log_.info("Finished packing Rasters.")   
+   
    
     def _unpackCMDS_(self):
         i = 0 #position in CMDS String
@@ -714,13 +773,15 @@ class XPLNEDSF:
         
 
     def _packAtoms_(self): #starts all functions to write all variables to strings (for later been written to file)
+        ###### TBD: only pack atoms if changed --> saves time !! ############
         self._log_.info("Preparing data to be written to file.")
-        self._log_.info("This version only applies changes to POOL, CMDS and SCAL atoms (all other atoms inc. SC32 are written as read)!")
+        self._log_.info("This version only applies changes to DEFS (not properties), POOL, SCAL, CMDS and DEMI/DEME atoms (all other atoms inc. SC32 are written as read)!")
         self._encodeDefs_() ### TBD: Properties
         self._scaleV_(16, True) #de-scale again       ############### TBD: SC32 scaling !! ##############
         self._encodePools_()
         self._packAllScalings_()
         self._packCMDS_()
+        self._packRaster_()
         return 0
                                               
   
@@ -737,7 +798,7 @@ class XPLNEDSF:
             self._log_.error("Cannot get elevation as y coordinate is not within boundaries!!!")
             return None
         if len(self.DefRasters) == 0: #No raster defined, use elevation from trias  #### NEW 7 ####
-            self._log_.error("getRasterElevation: dsf includes no raster, elevation returned is None")
+            self._log_.error("getVertexElevation: dsf includes no raster, elevation returned is None")
             return None
         else: # use raster to get elevation; THIS VERSION IS ASSUMING THAT ELEVATION RASTER IS THE FIRST RASTER-LAYER (index 0), if it is not called "elevation" a warning is raised ###
             if self.DefRasters[0] != "elevation":
