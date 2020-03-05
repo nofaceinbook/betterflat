@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 #******************************************************************************
 #
-# muxp_math.py   Version: 0.0.2 exp
+# muxp_math.py   Version: 0.0.3 exp
 #        
 # ---------------------------------------------------------
 # Mathematical functions for Python Tool: Mesh Updater X-Plane (muxp)
@@ -62,6 +62,65 @@ def isPointInTria(p, t): #delivers True if p lies in t, else False
     a, b = PointLocationInTria(p, t)
     c = 1 - a - b
     return (0 <= a <= 1 and 0 <= b <= 1 and 0 <= c <= 1)
+
+def PointInPoly(p, poly):
+    """
+    Test wether a point p with [lat, lon] coordinates lies in polygon (list of [lat, lon] pairs and retruns True or False.
+    Counts number of intersections from point outside poly to p on same y-coordinate, if it is odd the point lies in poly.
+    To avoid intersection at vertex of poly on same y-coordinate, such points are shifte about 1mm above for testing intersection.
+    """
+    count = 0
+    for i in range(len(poly) - 1):  # for all segments in poly
+        epsilon0, epsilon1 = (0, 0)  # added to p's y coordinate in case p is on same y-coordinate than according vertex of segment
+        if poly[i][1] < p[1] and poly[i + 1][1] < p[1]:  # if vertices of segment below y-coordinate of p, no intersection
+            continue
+        if poly[i][1] > p[1] and poly[i + 1][1] > p[1]:  # if vertices of segment above y-coordinate of p, no intersection
+            continue
+        if poly[i][1] == p[1]:
+            epsilon0 = 0.00000001
+        if poly[i + 1][1] == p[1]:
+            epsilon1 = 0.00000001
+        x = intersection([poly[i][0], poly[i][1] + epsilon0], [poly[i + 1][0], poly[i + 1][1] + epsilon1], [181, p[1]], p)
+        if x:
+            count += 1
+    if count % 2:
+        return True  # odd number of intersections, so p in poly
+    else:
+        return False  # even number of intersection, so p outside poly
+
+def edgeInPoly(p, q, poly):
+    """
+    Checks if an edge from p to q is inside or at least intersects a polygon.
+    Returns True or False accordingly.
+    """
+    if PointInPoly(p, poly) or PointInPoly(q, poly): #at least one point of edge is in poly
+        return True
+    for i in range(len(poly) - 1):  # for all segments in poly
+        if intersection(poly[i], poly[i+1], p, q):
+            return True
+    return False
+            
+
+def BoundingRectangle(vertices, borderExtension=0.0001):
+    """
+    Returns 4-tuple of (latS, latN, lonW, lonE) building the smallest rectangle to include all vertices in list as pairs of [lon, lat].
+    In order to be sure that the rectangle includes really all neede, the border can be extended. Default is about 10m.
+    """
+    minx = 181  #use maximal out of bound values to be reset by real coordinates from patch
+    maxx = -181
+    miny = 91
+    maxy = -91
+    for v in vertices: #all vertexes of each triangle in patch
+        if v[0] < minx:
+            minx = v[0]
+        if v[0] > maxx:
+            maxx = v[0]
+        if v[1] < miny:
+            miny = v[1]
+        if v[1] > maxy:
+            maxy = v[1]
+    return miny-borderExtension, maxy+borderExtension, minx-borderExtension, maxx+borderExtension
+
 
 def createFullCoords(x, y, t):
     """
