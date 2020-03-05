@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 #******************************************************************************
 #
-# muxp_area.py    Version: 0.0.2 exp
+# muxp_area.py    Version: 0.0.5 exp
 #        
 # ---------------------------------------------------------
 # Python Class for adapting mesh in a given area of an XPLNEDSF
@@ -72,6 +72,70 @@ class muxpArea:
         self.log.info("  ... dsf has {} trias and {} trias from {} different patches are now in the extracted area.".format(triaCount, len(self.atrias), len(self.apatches)))
         return
     
+    def cutPoly(self, p):
+        """
+        Cuts a polygon in the area.
+        Tbd: Distingish between if mesh in poly is there and if the area terrain should be used for p or if it brings its own....
+        Assumption: Polygon is closed, meaning first vertex in list is the same as last
+        ISSUE ??? Do we need Deepcopy here?
+        """
+        self.log.info("Cutting Polygon into area.")
+        cPs = [] #functions returns a list of cutting Points that need to be inserted in mesh p (at it's boundary)
+        new_ps = [] #polygons that need to be triangulated and added
+        old_trias = [] #old trias to be removed because replaced by new polys
+        for t in self.atrias: #go through all trias in area
+            inside_poly = False
+            newp=[]
+            if isPointInTria(p[0], t): #are we in the tria where poly starts?
+                ## we need to go back to find entrance in poly
+                l = len(p) - 1
+                while isPointInTria(p[l], t): #p[last] = p[0] and should also be in tria
+                    newp.insert(0, p[l])
+                    l -= 1
+                    if l == 0: #we did a loop within the same tria
+                        self.log.error("The whole poly lies in one tria. This special case is not treated yet.")
+                        ############# TBD: handle this case poly in one tria #############
+                        return
+                #p[l] is now outside and p[l+1] insdide, so we get now cutting point entering tria 
+                for edge in range(3): #go through all edges of tria
+                    cuttingPoint = intersection(p[l], p[l+1], t[edge][0:2], t[(edge+1)%3][0:2]) # modulo 3 returns to first vertex to close tria
+                    if cuttingPoint:
+                        newp.insert(0,cuttingPoint)
+                        cPs.append(cuttingPoint)
+                        entry_cut_edge_start_point = edge
+                        inside_poly = True
+                #now we can continue to find outgoing point from tria starting with line p[0] to p[1]        
+            for l in range(len(p) - 1): #go through all lines of poly p
+                if inside_poly == True and isPointInTria(p[l+1], t): #current line is in poly
+                    newp.append(p[l+1])
+                for edge in range(3): #go through all edges of tria
+                    cuttingPoint = intersection(p[l], p[l+1], t[edge][0:2], t[(edge+1)%3][0:2]) # modulo 3 returns to first vertex to close tria
+                    if cuttingPoint:
+                        newp.append(cuttingPoint)
+                        cPs.append(cuttingPoint)
+                        if inside_poly == True:
+                            inside_poly = False
+                            ### create outer poly --> add points to newp
+                            if ((p[l+1][0] - p[l][0]) * (t[edge][1] - p[l][1]) - (p[l+1][1] - p[l][1]) * (t[edge][0] - p[l][0])) >= 0: #tria point t[edge] lies on correct side
+                                #go backwards through tria till first cutting point ############# BELOW NOT CORRECT YET ####################
+                                if entry_cut_edge_start_point > (edge)%3: newp.append(t[(edge)%3][0:2])
+                                if entry_cut_edge_start_point > (edge-1)%3: newp.append(t[(edge-1)%3][0:2])
+                                if entry_cut_edge_start_point > (edge-2)%3: newp.append(t[(edge-2)%3][0:2])
+                            else: #tria point t[edge+1] lies on correct side
+                                #go forward through tria till first cutting point  ############# BELOW NOT CORRECT YET ####################
+                                if entry_cut_edge_start_point <= (edge+1)%3: newp.append(t[(edge+1)%3][0:2])
+                                if entry_cut_edge_start_point <= (edge+2)%3: newp.append(t[(edge+2)%3][0:2])
+                                if entry_cut_edge_start_point <= (edge+3)%3: newp.append(t[(edge+3)%3][0:2])
+                            old_trias.append(t)
+                        else: #we are entering now the poly
+                            inside_poly = True
+                            entry_cut_edge_start_point = edge
+            if len(newp) > 0:
+                new_ps.append(newp)
+            ### TBD: insert CPs into poly and remove old Trias and insert triangulted new_ps
+        return new_ps
+                            
+    
     def cutEdges(self, v, w, accuracy = 10):
         """
         Cuts all edges of trias that intersect with segment from vertex v to w in self.atrias.
@@ -130,7 +194,112 @@ class muxpArea:
         for ot in old_trias:
             self.atrias.remove(ot) #update area trias by by removing trias that are replaced by new ones
         self.log.info("  ... this cut returned {} cutting points.".format(len(cPs)))
-        return cPs 
+        return cPs
+    
+    def triasInPoly(self, poly):
+        """
+        Returns list of indieces to trias that are that are intersecting or ale completely within poly.
+        """
+        self.log.info("Searching all trias in area in/intersecting poly: {}".format(poly))
+        s = set()
+        for t_index in range(len(self.atrias)):
+            t = self.atrias[t_index]
+            for i in range(3):  # 3 sides of triangle
+                for j in range(len(poly) - 1):  # sides of poly
+                    if intersection(t[i], t[(i+1)%3], poly[j], poly[j + 1]):  # current triangle intersects with an poly line
+                        s.add(t_index) 
+            if PointInPoly(t[0],poly):  # Check also that not complete Tria lies in poly by checking for first vertex of Tria
+                s.add(t_index)  
+            if isPointInTria(poly[0], t):  # Check also that not complete poly lies in current tria by checking for first vertex of poly
+                s.add(t_index) 
+        self.log.info("   ... {} trias of area found that belong to mesh triangles intersecting or within boundary.".format(len(s)))
+        return s
+
+    def edges(self, poly=None):
+        """
+        Returns dictonary of all edges in area, where the key are endpoints (p, q) round to 7 digits
+        and the values are lists with indeces to the trias in self.atrias and number of edge in tria.
+        If poly is given only edges from trias in/intersecting poly are returned.
+        """
+        edges = {}
+        if poly == None:
+            tria_indeces = range(len(self.atrias))
+        else:
+            tria_indeces = self.triasInPoly(poly)
+        for tx in tria_indeces:
+            p = [] #list of points in tria
+            for i in range(3): #get points of tria in p
+                p.append( ( round(self.atrias[tx][i][0],7), round(self.atrias[tx][i][1],7)) )
+            for i in range(3): #go through edges
+                if (p[i][0], p[i][1], p[(i+1)%3][0], p[(i+1)%3][1]) in edges:
+                    edges[ (p[i][0], p[i][1], p[(i+1)%3][0], p[(i+1)%3][1]) ].append([tx, i])
+                elif (p[(i+1)%3][0], p[(i+1)%3][1], p[i][0], p[i][1]) in edges: #check if edge is with other vertex order in dictionary
+                    edges[ (p[(i+1)%3][0], p[(i+1)%3][1], p[i][0], p[i][1]) ].append([tx, i])
+                else: #edge not yet in dictionary
+                     edges[(p[i][0], p[i][1], p[(i+1)%3][0], p[(i+1)%3][1])]=[[tx, i]]
+        return edges
+
+    
+    def limitEdges(self, poly, limit):
+        """
+        Limits the length of the edges poly to limit in meter.
+        """
+        self.log.info("Limit length of edges in poly {} to {}m.".format(poly, limit))
+        edges = self.edges(poly)
+        big_trias = {} #dictionary containg trias with long edges (key is index to tria in self.atrias and value is list of edge indices for edges too long)
+        for pq, edge_refs in edges.items(): #key in dictionary ar coordinates of vertex p and q of edge, value is list with reference to tria where this edge is
+            d = distance([pq[0], pq[1]], [pq[2], pq[3]])
+            #if d > limit and (PointInPoly([pq[0], pq[1]], poly) or PointInPoly([pq[2], pq[3]], poly)): #select long edges only if at least one vertex is inside poly
+            if d > limit and edgeInPoly([pq[0], pq[1]], [pq[2], pq[3]], poly): #select only edges longer than limit and inside or at least intersecting poly
+                for e in edge_refs:
+                    if e[0] in big_trias:
+                        big_trias[e[0]].append(e[1])
+                    else:
+                        big_trias[e[0]] = [ e[1] ]
+        old_trias = [] #list of trias with long edges to be removed
+        new_trias = [] #list of trias with shorter edges to be created
+        for tx, le in big_trias.items():
+            t = self.atrias[tx]
+            if len(le) == 1: #In tria t with index tx one edge with index le is too long
+                cP = [0.5 * ( t[(le[0]+1)%3][0] + t[le[0]][0] ), 0.5 * ( t[(le[0]+1)%3][1] + t[le[0]][1] ) ]
+                new_v = createFullCoords(cP[0], cP[1], t)
+                new_trias.append([ t[le[0]], new_v, t[(le[0]+2)%3], t[3], t[4], t[5], t[6]])
+                new_trias.append([ new_v, t[(le[0]+1)%3], t[(le[0]+2)%3], t[3], t[4], t[5], t[6]])
+                old_trias.append(t)
+            elif len(le) == 2: #In tria t two edges are too long, meaning it is important which was detected first to have same structure for all trias
+                cP0 = [ 0.5 * ( t[(le[0]+1)%3][0] + t[le[0]][0] ), 0.5 * ( t[(le[0]+1)%3][1] + t[le[0]][1] ) ]
+                cP1 = [ 0.5 * ( t[(le[1]+1)%3][0] + t[le[1]][0] ), 0.5 * ( t[(le[1]+1)%3][1] + t[le[1]][1] ) ]
+                new_v0 = createFullCoords(cP0[0], cP0[1], t)
+                new_v1 = createFullCoords(cP1[0], cP1[1], t)
+                if (le[0]+1)%3 == le[1]: #second cutting point is on the following edge
+                    new_trias.append([ t[le[0]], new_v0, t[(le[0]+2)%3], t[3], t[4], t[5], t[6]])
+                    new_trias.append([ new_v0, t[(le[0]+1)%3], new_v1, t[3], t[4], t[5], t[6]])
+                    new_trias.append([ new_v1, t[(le[0]+2)%3], new_v0, t[3], t[4], t[5], t[6]])
+                else: #second cutting point is two edges away (=the edge before)
+                    new_trias.append([ new_v0, t[(le[0]+1)%3], t[(le[0]+2)%3], t[3], t[4], t[5], t[6]])
+                    new_trias.append([ new_v0, t[(le[0]+2)%3], new_v1, t[3], t[4], t[5], t[6]])
+                    new_trias.append([ new_v0, new_v1, t[le[0]], t[3], t[4], t[5], t[6]])
+                old_trias.append(t)
+            elif len(le) == 3: #In tria t all three edges are tool long
+                cP = [] #list for all three new Cutting points
+                new_v =[] #list for all three new vertex coordinates
+                for i in range(3): # inserted structure for 3 long vertices is always the same regardless which cP is inserted first
+                    cP.append([0.5 * ( t[(i+1)%3][0] + t[i][0] ), 0.5 * ( t[(i+1)%3][1] + t[i][1] ) ])
+                    new_v.append(createFullCoords(cP[-1][0], cP[-1][1], t))
+                for i in range(3):
+                    new_trias.append([ t[i], new_v[i], new_v[(i+2)%3], t[3], t[4], t[5], t[6]])
+                new_trias.append([new_v[i], new_v[(i+1)%3], new_v[(i+2)%3], t[3], t[4], t[5], t[6]])
+                old_trias.append(t)
+        for nt in new_trias:
+            self.atrias.append(nt) #update area trias by appending new trias
+        for ot in old_trias:
+            self.atrias.remove(ot) #update area trias by by removing trias that are replaced by new ones
+        self.log.info("  ... limiting replaced {} trias with {} new trias having shorter edges.".format(len(old_trias), len(new_trias)))
+        if len(new_trias) > 0: #New trias could still have longer edges
+            self.limitEdges(poly, limit) #shorten again
+        ########## This funciton might be improved to go only through edges in new_trias instead starting from scratch in recursions
+
+        
     
     def createDSFVertices(self, elevscal=1):
         """
@@ -193,9 +362,23 @@ class muxpArea:
                             return -1
                         self.dsf.V.append([v])
                         self.dsf.Scalings.append(deepcopy(self.dsf.Scalings[t[vt+3][0]])) #get scalings from the original tria vertex the new vertex is inside
+                        ########## HOWEVER NEW VERTEX MIGHT BE OUTSIDE THESE SCALINGS --> check and adapt if required AFTER elevation was adapted as needed
                         if elevscal < 1: #for given submeter elevation pool-scaling has to be adapted
                             self.dsf.Scalings[-1][2][0] = 65535 * elevscal #new multiplier based on required scaling for elevation defined for new pool
                             self.dsf.Scalings[-1][2][1] = int(-500 + int((v[2]+500)/(65535 * elevscal)) * (65535 * elevscal)) #offset for elevation of v   ######## -500m is deepest vaule that can be defined with this routine ####
+                        ## Check new scaling for vertex and adapt as required based on multipliers / offsets give
+                        scale_checked = False
+                        while not scale_checked:
+                            scale_checked = True #assume test will passed, will be set False if on check does not pass
+                            for j in range(len(v)): #check for each plane j if v could fit between minimum and maximum reach of scale
+                                if v[j] < self.dsf.Scalings[-1][j][1]: #v at plane j is lower than scaling allows
+                                    self.dsf.Scalings[-1][j][1] -= self.dsf.Scalings[-1][j][0] #subtract one scalefactor from base
+                                    scale_checked = False #check if new scaling fits
+                                    self.log.warning("  Vertex {} does not fit to scaling. Reduced scaling base for plane {} to {}!".format(v, j, self.dsf.Scalings[-1][j][1]))
+                                if v[j] > self.dsf.Scalings[-1][j][1] + self.dsf.Scalings[-1][j][0]: #v at plane j is higher than scaling allows
+                                    self.dsf.Scalings[-1][j][1] += self.dsf.Scalings[-1][j][0] #add one scalefactor to base
+                                    scale_checked = False #check if new scaling fits
+                                    self.log.warning("  Vertex {} does not fit to scaling. Increased scaling base for plane {} to {}!".format(v, j, self.dsf.Scalings[-1][j][1]))
                         poolID4v = len(self.dsf.Scalings) - 1 #ID for the pool is the last one added
                         self.log.info("  New pool with index {} and scaling {} added to insert vertex {}.".format(poolID4v, self.dsf.Scalings[poolID4v], v))
                         newPools.append(poolID4v)
@@ -222,3 +405,5 @@ class muxpArea:
             dsftrias.extend(patchTrias[p])
             self.dsf.Patches[p].trias2cmds(dsftrias)
                 
+
+
