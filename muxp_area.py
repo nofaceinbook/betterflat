@@ -25,6 +25,7 @@
 from logging import getLogger
 from muxp_math import *
 from copy import deepcopy
+from tripy import *
     
 class muxpArea:
     
@@ -76,19 +77,23 @@ class muxpArea:
         """
         Cuts a polygon in the area.
         Tbd: Distingish between if mesh in poly is there and if the area terrain should be used for p or if it brings its own....
-        Assumption: Polygon is closed, meaning first vertex in list is the same as last
+        Assumption: Polygon is closed, meaning first vertex in list is the same as last.
+                    This version requires polygon in clockwise vertex order and polygon must be convex.
         ISSUE ??? Do we need Deepcopy here?
         """
         self.log.info("Cutting Polygon into area.")
         cPs = [] #functions returns a list of cutting Points that need to be inserted in mesh p (at it's boundary)
         new_ps = [] #polygons that need to be triangulated and added
         old_trias = [] #old trias to be removed because replaced by new polys
+        new_trias = [] #new trias created when inserting poly
         for t in self.atrias: #go through all trias in area
+            self.log.info("Checking tria for cut: {}".format(t))
             inside_poly = False
-            newp=[]
+            newp=[] #new poly for this tria
+            poly_end_point_index = len(p) - 1
             if isPointInTria(p[0], t): #are we in the tria where poly starts?
                 ## we need to go back to find entrance in poly
-                l = len(p) - 1
+                l = len(p) - 2 ###### last vertex is the same as first, so start with the next one (-2) !!!!
                 while isPointInTria(p[l], t): #p[last] = p[0] and should also be in tria
                     newp.insert(0, p[l])
                     l -= 1
@@ -96,7 +101,8 @@ class muxpArea:
                         self.log.error("The whole poly lies in one tria. This special case is not treated yet.")
                         ############# TBD: handle this case poly in one tria #############
                         return
-                #p[l] is now outside and p[l+1] insdide, so we get now cutting point entering tria 
+                #p[l] is now outside and p[l+1] insdide, so we get now cutting point entering tria
+                poly_end_point_index = l -1  ##?????  #we only need to go now to index l-1 with line to l, as from l to to end now considered
                 for edge in range(3): #go through all edges of tria
                     cuttingPoint = intersection(p[l], p[l+1], t[edge][0:2], t[(edge+1)%3][0:2]) # modulo 3 returns to first vertex to close tria
                     if cuttingPoint:
@@ -104,10 +110,12 @@ class muxpArea:
                         cPs.append(cuttingPoint)
                         entry_cut_edge_start_point = edge
                         inside_poly = True
+                        l = 0
+                        while isPointInTria(p[l], t): #find all next vertices of poly still in tria beginning now with first vertex of poly in tria l=0
+                            newp.append(p[l]) #and append them to news poly
+                            l += 1
                 #now we can continue to find outgoing point from tria starting with line p[0] to p[1]        
-            for l in range(len(p) - 1): #go through all lines of poly p
-                if inside_poly == True and isPointInTria(p[l+1], t): #current line is in poly
-                    newp.append(p[l+1])
+            for l in range(poly_end_point_index): #go through all lines of poly p, either len of p-1 or if already entered above to point not considered yet
                 for edge in range(3): #go through all edges of tria
                     cuttingPoint = intersection(p[l], p[l+1], t[edge][0:2], t[(edge+1)%3][0:2]) # modulo 3 returns to first vertex to close tria
                     if cuttingPoint:
@@ -117,22 +125,50 @@ class muxpArea:
                             inside_poly = False
                             ### create outer poly --> add points to newp
                             if ((p[l+1][0] - p[l][0]) * (t[edge][1] - p[l][1]) - (p[l+1][1] - p[l][1]) * (t[edge][0] - p[l][0])) >= 0: #tria point t[edge] lies on correct side
+                            ###### Above not correct; depends <= or >= seems to check above or below regardless from perspective of line
+                            ######### Possible issue: it might be that the first cutting point is actually the leaving point of tria with regard to direction of line !!!!!
                                 #go backwards through tria till first cutting point ############# BELOW NOT CORRECT YET ####################
-                                if entry_cut_edge_start_point > (edge)%3: newp.append(t[(edge)%3][0:2])
-                                if entry_cut_edge_start_point > (edge-1)%3: newp.append(t[(edge-1)%3][0:2])
-                                if entry_cut_edge_start_point > (edge-2)%3: newp.append(t[(edge-2)%3][0:2])
+                                newp.append(t[(edge)][0:2])                 
+                                if entry_cut_edge_start_point != (edge-1)%3:
+                                    newp.append(t[(edge-1)%3][0:2])
+                                    if entry_cut_edge_start_point != (edge-2)%3:
+                                        newp.append(t[(edge-2)%3][0:2])
                             else: #tria point t[edge+1] lies on correct side
                                 #go forward through tria till first cutting point  ############# BELOW NOT CORRECT YET ####################
-                                if entry_cut_edge_start_point <= (edge+1)%3: newp.append(t[(edge+1)%3][0:2])
-                                if entry_cut_edge_start_point <= (edge+2)%3: newp.append(t[(edge+2)%3][0:2])
-                                if entry_cut_edge_start_point <= (edge+3)%3: newp.append(t[(edge+3)%3][0:2])
+                                newp.append(t[(edge+1)%3][0:2]) 
+                                if entry_cut_edge_start_point != (edge+2)%3:
+                                    newp.append(t[(edge+2)%3][0:2])
+                                    if entry_cut_edge_start_point <= (edge+3)%3:
+                                        newp.append(t[(edge+3)%3][0:2])
                             old_trias.append(t)
+                            self.log.info("Following tria planned to be removed: {}".format(t))
+                            newp.append(newp[0]) #create closed poly and add first point again
+                            new_ps.append(deepcopy(newp)) ############## OPEN: DO WE NEED DEEPCOPY Of newp ??????????????????????? ################
+                            ############ TBD: Make sure that polygon is always in same order so that all overlaying trias are split exact the same way !!!!!!!!!!!!!! ############################
+                            self.log.info("Following polygon is earclipped: {} in:".format(newp))
+                            for tria in earclip(deepcopy(newp[:-1])): #earclip want's polygon without last vertex = first vertex ############# OPEN: DO WE NEED DEEPCOPY Of newp ??????????????????????? ################
+                                self.log.info("    {}".format(tria))
+                                new_v = [None, None, None]
+                                for e in range(3):
+                                    new_v[e] = createFullCoords(tria[e][0], tria[e][1], t)
+                                new_trias.append([new_v[0], new_v[1], new_v[2], t[3], t[4], t[5], t[6]])
+                            newp = []
                         else: #we are entering now the poly
                             inside_poly = True
                             entry_cut_edge_start_point = edge
-            if len(newp) > 0:
-                new_ps.append(newp)
-            ### TBD: insert CPs into poly and remove old Trias and insert triangulted new_ps
+                            while isPointInTria(p[l+1], t): #find all next vertices of poly still in tria
+                                newp.append(p[l+1]) #and append them to news poly  
+                                l += 1 ####THIS DOES NOT CHANGE THE Value for the iterator range above, meaning that these lines inside are tested again for intersections which is not necessary
+                                       #### --> TO BE IMPROVED
+        for nt in new_trias: #add all new trias
+            self.atrias.append(nt)
+        for ot in old_trias: #and remove old ones
+            self.log.info("Following Tria is removed: {}".format(ot))
+            try: #as we might cross same tria several times there might several removals for same tria
+                self.atrias.remove(ot)
+            except ValueError:
+                self.log.info("   was already removed...")
+        ### TBD: insert CPs into poly and insert triangulted new_ps
         return new_ps
                             
     
