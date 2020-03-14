@@ -1,6 +1,6 @@
 #******************************************************************************
 #
-# xplnedsf2.py        Version 0.5.3  for muxp
+# xplnedsf2.py        Version 0.5.4  for muxp
 # ---------------------------------------------------------
 # Python module for reading and writing X_Plane DSF files.
 #
@@ -24,6 +24,8 @@
 #
 #******************************************************************************
 
+### NEW 0.5.4: Encoding PORP Atom, correct decoding of V32 pools/scaling using
+###            correct max_int for modulo unwrapping, and encoding 32bit pools
 
 from os import path, stat #required to retrieve length of dsf-file
 from struct import pack, unpack #required for binary pack and unpack
@@ -220,6 +222,15 @@ class XPLNEDSF:
         l = self._GetStrings_(self._Atoms_['PORP'])
         for i in range(0, len(l), 2):
             self.Properties[l[i]] = l[i+1] #the list contains property(dictionary key) and values one after each other
+            
+    def _encodeProps_(self): #encodes the properties of the dsf and stores them in PORP atom
+        b = b'' #binary encoding to be stored in PORP
+        for prop in self.Properties:
+            b += prop.encode("utf-8")
+            b += b'\x00'
+            b += self.Properties[prop].encode("utf-8")
+            b += b'\x00'
+        self._Atoms_['PORP'] = b
 
      
     def _extractDefs_(self): #extracts the definition (DEFN) atoms TERT, OBJT, POLY, NETW, DEMN and stores them in dictionarys
@@ -242,7 +253,7 @@ class XPLNEDSF:
         self._Atoms_['YLOP'] = self._PutStrings_(self.DefPolygons)
         self._Atoms_['WTEN'] = self._PutStrings_(self.DefNetworks)
         self._Atoms_['NMED'] = self._PutStrings_(self.DefRasters)
-        ###### TBD: other definitions #########################
+
 
         
     def _extractPools_(self, bit = 16):  
@@ -252,12 +263,14 @@ class XPLNEDSF:
             V = self.V32
             ctype = "<L"
             size = 4 #bytes read per coordinate in 32 bit pool
+            max_int = 4294967296
         else: #assuming the standard 16bit Pool case
             self._log_.info("Start to unpack and extract {} pools ({} bit)...".format(len(self._Atoms_['LOOP']), bit))
             atomstring = self._Atoms_['LOOP']
             V = self.V
             ctype = "<H"
             size = 2 #bytes read per coordinate in 16 bit pool
+            max_int = 65536
         for s in atomstring: #goes through all Pools read; string s has to be unpacked
             nArrays, nPlanes = unpack('<IB', s[0:5])
             if self._DEBUG_: self._log_.debug("Pool number {} has {} Arrays (vertices) with {} Planes (coordinates per vertex)!".format(len(V), nArrays, nPlanes))
@@ -296,7 +309,7 @@ class XPLNEDSF:
                             i += 1
                 if encType == 1 or encType == 3: #values are also stored differenced
                     for i in range (1, nArrays):  
-                        V[-1][i][n] = (V[-1][i][n] + V[-1][i-1][n]) % 65536  #undo differntiation and modulo for wrapping two byte unsigned integer
+                        V[-1][i][n] = (V[-1][i][n] + V[-1][i-1][n]) % max_int  #undo differntiation and modulo for wrapping two byte unsigned integer
                                                          ##### NEW TBD #### FOR 32 Bit Pools adapt Moduls ??!! #################### NEW TBD ######################## NEW TBD ########
             self._updateProgress_(len(s))
 
@@ -325,30 +338,54 @@ class XPLNEDSF:
             yield(len(individuals), individuals)
         
     
-    def _encodePools_(self): #overwrites current Pool atom with actual values of all vertices
-        ###### FOR THE MOMENT ONLY WORKING FOR 16 BIT POOLS !!!!!!!!! ################################
-        self._log_.info("Start to encode all pools... (read values of vertices are overwritten)")
-        self._Atoms_['LOOP'] = [] #start new (future version also think of creating Pool atom in case it new dsf file will be created !!!!!!!!!!)
+    def _encodePools_(self, bit = 16): #overwrites current 16 (default) or 32 bit Pool atom with actual values of all vertices
+        if bit == 32:
+            atom = '23OP'
+            V = self.V32
+            ctype = "<L"
+            max_int = 4294967296
+        else: #assuming the standard 16bit Pool case
+            atom = 'LOOP'
+            V = self.V
+            ctype = "<H"
+            max_int = 65536            
+        self._log_.info("Start to encode {}  {}bit pools... (read values of vertices are overwritten)".format(len(V), bit))
+        self._Atoms_[atom] = [] #start new (future version also think of creating Pool atom in case it new dsf file will be created !!!!!!!!!!)
         ####### This version only stores pools in differentiated run-length encoding !!! #############
         ## Start with differentiation of all values ##
-        for p in self.V: # go through all pools
+        for p in V: # go through all pools
+            if len(p) == 0: #some standard dsf files have empty pools, keep them
+                self._log_.info("Empty pool number {} encoded.".format(V.index(p)))
+                encpool = pack("<IB",0,0) #pool has no vertices with no planes (is empty)
+                self._Atoms_[atom].append(encpool)
+                continue
             encpool = pack("<IB",len(p),len(p[0])) ## start string of binary encoded pool number of arrays and number of planes (taken from first vertex)
             for n in range(len(p[0])): # go through all planes; number of planes just taken from first vertex in pool
                 plane = [p[0][n]] #set plane to first value (for starts with second value to calculete differences)
                 for i in range(1, len(p)): #go through all values of a plane for differntiation and append to current plane
-                    plane.append((p[i][n] - p[i-1][n]) % 65536)  #Calculate difference to previous value AND take care of wrapping for two byte unsigned integer
+                    plane.append((p[i][n] - p[i-1][n]) % max_int)  #Calculate difference to previous value AND take care of wrapping for two byte unsigned integer
                 encpool += pack('<B',3) #plane will be encoded differntiated + runlength
-                if p[0][n] < 0 or p[0][n] > 65535: ############################################### ONLY TESTING, BUT ERROR CHECK FOR ROUNDING REQURIED as in latest bflat.py ###################
-                    self._log_.error("Wrong encoding value: {} in Pool {} and Plane {}!!".format(p[0][n], self.V.index(p), n))
-                pack('<H',p[0][n])
+                if p[0][n] < 0:  #### NEW 4.3 #####
+                    self._log_.warning("In pool {} negative value {} to be encoded. Set to 0.".format(self.V.index(p), p[0][n]))   
+                    p[0][n] = 0
+                if p[0][n] >= max_int: #### NEW 4.3 #####
+                    self._log_.warning("In pool {} exceeding value {}  to be encoded. Set to {}.".format(self.V.index(p), p[0][n], max_int-1))
+                    p[0][n] = max_int - 1 
+                pack(ctype,p[0][n])
                 ## Now perform run-length encoding ##
                 for rlpair in self._encodeRunLength_(plane):
                     encpool += pack('<B', rlpair[0]) #encode runlength value
                     for v in rlpair[1]:
-                        encpool += pack('<H', v)
+                        if v < 0:   #### NEW 4.3 #####
+                            self._log_.warning("In pool {} negative value {} to be encoded. Set to 0.".format(self.V.index(p), v))  
+                            v = 0
+                        if v >= max_int: #### NEW 4.3 #####
+                            self._log_.warning("In pool {} exceeding value {}  to be encoded. Set to {}.".format(self.V.index(p), v, max_int-1))
+                            v = max_int - 1                               
+                        encpool += pack(ctype, v)
             self._updateProgress_(len(encpool)) 
-            self._Atoms_['LOOP'].append(encpool)
-        self._log_.info("Encoding of pools finished.")
+            self._Atoms_[atom].append(encpool)
+        self._log_.info("Encoding of {} bit pools finished.".format(bit))
  
 
     def _extractScalings_(self, bit = 16): #extract scaling values from atoms and writes them to according lists
@@ -389,9 +426,11 @@ class XPLNEDSF:
         if bit == 32:
             V = self.V32
             Scalings = self.Scal32
+            max_int = 4294967296 - 1 
         else: #assuming the standard 16bit Pool case
             V = self.V
             Scalings = self.Scalings
+            max_int = 65536 - 1
             
         if len(V) != len(Scalings):
             self._log_.error("Amount of Scale atoms does not equal amount of Pools!!")
@@ -404,15 +443,15 @@ class XPLNEDSF:
                 self._log_.error("Amount of scale values for pool {} does not equal the number of coordinate planes!!!".format(p))
                 return 2
             for n in range(len(Scalings[p])): #for all scale tuples for that pool = all coordinate planes in pool
-                if self._DEBUG_: self._log_.debug("Will now scale pool {} plane {} with multiplier: {} and offset: {}".format(p, n ,Scalings[p][n][0], Scalings[p][n][1]))                
+                if self._DEBUG_: self._log_.debug("Will now scale pool {} plane {} with multiplier: {} and offset: {}".format(p, n ,Scalings[p][n][0], Scalings[p][n][1]))                              
                 if float(Scalings[p][n][0]) == 0.0:
                     if self._DEBUG_: self._log_.debug("   Plane will not be scaled because scale is 0!")
                     break
                 for v in range(len(V[p])): #for all vertices in current plane
                     if reverse: #de-scale vertices
-                        V[p][v][n] = round((V[p][v][n] - Scalings[p][n][1]) * 65535 / Scalings[p][n][0])   #de-scale vertex v in pool p for plane n by subtracting offset and dividing by multiplyer
+                        V[p][v][n] = round((V[p][v][n] - Scalings[p][n][1]) * max_int / Scalings[p][n][0])   #de-scale vertex v in pool p for plane n by subtracting offset and dividing by multiplyer
                     else:  #scale vertices
-                        V[p][v][n] = (V[p][v][n] * Scalings[p][n][0] / 65535) + Scalings[p][n][1]  #scale vertex v in pool p for plane n with multiplyer and offset
+                        V[p][v][n] = (V[p][v][n] * Scalings[p][n][0] / max_int) + Scalings[p][n][1]  #scale vertex v in pool p for plane n with multiplyer and offset
                
                 
     def _extractRaster_(self):  #extracts alll rasters from atoms and stores them in list
@@ -775,10 +814,13 @@ class XPLNEDSF:
     def _packAtoms_(self): #starts all functions to write all variables to strings (for later been written to file)
         ###### TBD: only pack atoms if changed --> saves time !! ############
         self._log_.info("Preparing data to be written to file.")
-        self._log_.info("This version only applies changes to DEFS (not properties), POOL, SCAL, CMDS and DEMI/DEME atoms (all other atoms inc. SC32 are written as read)!")
-        self._encodeDefs_() ### TBD: Properties
-        self._scaleV_(16, True) #de-scale again       ############### TBD: SC32 scaling !! ##############
-        self._encodePools_()
+        self._log_.info("This version does not yet support nested polygons (Command ID 14)!")
+        self._encodeProps_()
+        self._encodeDefs_() 
+        self._scaleV_(16, True) #de-scale again      
+        self._scaleV_(32, True)
+        self._encodePools_(16)
+        self._encodePools_(32)
         self._packAllScalings_()
         self._packCMDS_()
         self._packRaster_()
